@@ -1,0 +1,6 @@
+{
+  "name": "Gadget Valuer NG",
+  "description": "Scan, identify, and value gadgets in Nigeria. Discover verified vendors/shops, compare devices, and trade securely.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

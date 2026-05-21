@@ -1,0 +1,54 @@
+# Codemagic CI/CD Build Pipeline Configuration
+# Project: Gadget Valuer NG (Native Android Application workflow)
+
+workflows:
+  android-native-workflow:
+    name: Gadget Valuer NG - Live Android Build
+    max_build_duration: 30
+    instance_type: mac_mini_m1
+    environment:
+      android_saved_keys:
+        - keyalias
+      groups:
+        - keystores
+      vars:
+        PACKAGE_NAME: "com.aistudio.gadgetvaluerng.abcxyz"
+      java: 17
+    triggering:
+      events:
+        - push
+        - tag
+      branch_patterns:
+        - pattern: '*'
+          include: true
+          source: true
+    scripts:
+      - name: Initialize Repository Environment
+        script: |
+          echo "Preparing Android Native Build environment..."
+          # If a Capacitor wrapper is used, run setup:
+          if [ -f "package.json" ]; then
+            npm install
+            npm run build
+            npx cap sync android
+          fi
+      - name: Set up build configuration secrets
+        script: |
+          # Inject placeholder or configuration keys safely into .env
+          echo "GEMINI_API_KEY=${GEMINI_API_KEY:-MY_GEMINI_API_KEY}" > .env
+      - name: Run Native Gradle Test Suite
+        script: |
+          gradle assembleDebugUnitTest
+          gradle testDebugUnitTest
+      - name: Build Launch Ready APK Artifact
+        script: |
+          gradle assembleDebug
+    artifacts:
+      - app/build/outputs/apk/**/*.apk
+    publishing:
+      email:
+        recipients:
+          - kheenganaz@gmail.com
+        notify:
+          success: true
+          failure: true
