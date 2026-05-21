@@ -24,6 +24,11 @@ workflows:
       - name: Initialize Repository Environment
         script: |
           echo "Preparing Android Native Build environment..."
+          # Decode debug keystore if present
+          if [ -f "debug.keystore.base64" ]; then
+            echo "Decoding debug.keystore.base64 to debug.keystore..."
+            base64 --decode debug.keystore.base64 > debug.keystore 2>/dev/null || base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null || base64 -D -i debug.keystore.base64 -o debug.keystore 2>/dev/null || openssl enc -d -base64 -in debug.keystore.base64 -out debug.keystore
+          fi
           # If a Capacitor wrapper is used, run setup:
           if [ -f "package.json" ]; then
             npm install
