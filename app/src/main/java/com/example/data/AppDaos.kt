@@ -29,3 +29,21 @@ interface ComparisonDao {
     @Query("DELETE FROM saved_comparisons WHERE id = :id")
     suspend fun deleteComparisonById(id: Int)
 }
+
+@Dao
+interface VendorDao {
+    @Query("SELECT * FROM vendor_shops ORDER BY timestamp DESC")
+    fun getAllVendors(): Flow<List<VendorShop>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertVendor(vendor: VendorShop): Long
+
+    @Query("UPDATE vendor_shops SET status = 'approved' WHERE id = :id")
+    suspend fun approveVendor(id: Int)
+
+    @Query("DELETE FROM vendor_shops WHERE id = :id")
+    suspend fun deleteVendor(id: Int)
+
+    @Query("SELECT COUNT(*) FROM vendor_shops")
+    suspend fun getVendorCount(): Int
+}

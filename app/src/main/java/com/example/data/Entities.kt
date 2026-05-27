@@ -35,3 +35,17 @@ data class SavedComparison(
     val specComparison: String, // Dynamic summary text
     val timestamp: Long = System.currentTimeMillis()
 )
+
+@Serializable
+@Entity(tableName = "vendor_shops")
+data class VendorShop(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val name: String,
+    val center: String,
+    val details: String,
+    val ratings: Double = 4.5,
+    val specialization: String,
+    val telephone: String,
+    val status: String = "approved", // "pending" of "approved"
+    val timestamp: Long = System.currentTimeMillis()
+)

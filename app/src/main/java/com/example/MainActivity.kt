@@ -23,13 +23,14 @@ class MainActivity : ComponentActivity() {
         val database = AppDatabase.getDatabase(this)
         val repository = AppRepository(
             valuationDao = database.valuationDao(),
-            comparisonDao = database.comparisonDao()
+            comparisonDao = database.comparisonDao(),
+            vendorDao = database.vendorDao()
         )
 
         // Instantiate core viewmodel coordinating all application sub-screens
         val viewModel = ViewModelProvider(
             this,
-            MainViewModelFactory(repository)
+            MainViewModelFactory(repository, applicationContext)
         )[MainViewModel::class.java]
 
         setContent {

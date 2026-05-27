@@ -90,7 +90,7 @@ val AppTypography = Typography(
 
 @Composable
 fun GadgetValuerTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true, // Forced default to match the premium dark slate webapp visual design
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme

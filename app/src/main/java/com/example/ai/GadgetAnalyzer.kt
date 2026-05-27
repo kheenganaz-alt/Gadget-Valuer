@@ -20,6 +20,7 @@ import retrofit2.http.Body
 import retrofit2.http.POST
 import retrofit2.http.Query
 import java.io.ByteArrayOutputStream
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 // --- Gemini REST API Data Classes ---
@@ -92,7 +93,7 @@ data class GadgetAnalysisResult(
     val valueMaxGradeB: Long, // Naira
     val valueMinGradeC: Long, // Naira
     val valueMaxGradeC: Long, // Naira
-    val localMarketAnalysis: String, // Ikeja Computer Village specific breakdown
+    val localMarketAnalysis: String, // general secondhand specific breakdown
     val screenVerificationTips: String, // Screen inspection checklist
     val batteryInspectionTips: String, // Battery health review
     val lockVerificationTips: String, // iCloud/Google Account locks inspection
@@ -148,9 +149,10 @@ class GadgetAnalyzer {
 
     suspend fun analyzeGadget(
         queryText: String,
-        bitmap: Bitmap? = null
+        bitmap: Bitmap? = null,
+        customApiKey: String? = null
     ): GadgetAnalysisResult = withContext(Dispatchers.IO) {
-        val apiKey = BuildConfig.GEMINI_API_KEY
+        val apiKey = if (!customApiKey.isNullOrBlank()) customApiKey else BuildConfig.GEMINI_API_KEY
         if (apiKey.isEmpty() || apiKey == "PLACEHOLDER_GEMINI_API_KEY") {
             // Emulate clean fallback state if API key is not yet set
             return@withContext getLocalSampleValuation(queryText)
@@ -170,9 +172,9 @@ class GadgetAnalyzer {
         }
 
         val systemInstruction = """
-            You are a seasoned gadget diagnostic manager, price researcher, and diagnostics professional based in Ikeja Computer Village, Lagos, Nigeria.
+            You are a seasoned gadget diagnostic manager, price researcher, and diagnostics professional.
             Your job is to identify second-hand laptops, smartphones, tablets, and smartwatches, and estimate their REAL resale valuation in Nigerian Naira (NGN ₦) for the current year.
-            The Naira pricing MUST accurately reflect real-world Nigerian second-hand markets (Ikeja Computer Village, Alaba Market, Abuja Wuse Zone 3 plaza, etc.).
+            The Naira pricing MUST accurately reflect real-world professional secondary trading markets.
             We categorize conditions as:
             - Grade A: Mint condition, looks like new, zero scratches, battery capacity >85%.
             - Grade B: Minor scratches/scuffs, normal usage wear, battery capacity 75-85%, fully functional.
@@ -253,84 +255,215 @@ class GadgetAnalyzer {
 
     // Excellent local fallback database that ensures offline/empty API state is completely functional!
     fun getLocalSampleValuation(queryText: String): GadgetAnalysisResult {
-        val queryLower = queryText.lowercase()
-        val isiPhone = queryLower.contains("iphone") || queryLower.contains("apple")
-        val isSamsung = queryLower.contains("samsung") || queryLower.contains("galaxy")
-        val isLaptop = queryLower.contains("macbook") || queryLower.contains("hp") || queryLower.contains("dell") || queryLower.contains("laptop")
-
-        return when {
-            isiPhone -> GadgetAnalysisResult(
-                name = "Apple iPhone 13 Pro (128GB)",
-                brand = "Apple",
-                model = "iPhone 13 Pro",
-                category = "Phone",
-                estimatedSpecs = "128GB Storage, 6GB RAM, 6.1-inch Super Retina XDR, A15 Bionic, 5G Network Support",
-                valueMinGradeA = 520000,
-                valueMaxGradeA = 580000,
-                valueMinGradeB = 440000,
-                valueMaxGradeB = 495000,
-                valueMinGradeC = 360000,
-                valueMaxGradeC = 415000,
-                localMarketAnalysis = "Excellent demand in Ikeja Computer Village. iPhone 13 Pro holds steady value. Highly liquid, meaning you can sell it in less than an hour at most hubs. Swapping is easily accepted by almost all vendors.",
-                screenVerificationTips = "1. Swipe down the notifications tray to verify the TrueTone toggle is active.\n2. Apply a bright white wallpaper and check the screen margins for any pinkish lines/artifacts which frequently occur when OLED displays are pressed.",
-                batteryInspectionTips = "1. Navigate to Settings > Battery > Battery Health and confirm the Maximum Capacity percentage.\n2. If it displays an 'Important Battery Message' or has a peak performance warning, the battery was replaced with a non-genuine unit.",
-                lockVerificationTips = "1. Check if an iCloud account is registered in Settings.\n2. Initiate a system reset and proceed till the activation screen to verify the device is entirely free from MDM or remote corporation locks.",
-                standardRepairsWarning = "Verify that the FaceID module and the front camera operate normally, as water splash damage easily shorts the ambient light sensor flex under the speaker grille."
-            )
-            isSamsung -> GadgetAnalysisResult(
-                name = "Samsung Galaxy S23 Ultra (256GB)",
-                brand = "Samsung",
-                model = "Galaxy S23 Ultra",
-                category = "Phone",
-                estimatedSpecs = "256GB ROM, 12GB RAM, 6.8-inch Dynamic AMOLED, Snapdragon 8 Gen 2, S-Pen included",
-                valueMinGradeA = 700000,
-                valueMaxGradeA = 780000,
-                valueMinGradeB = 600000,
-                valueMaxGradeB = 670000,
-                valueMinGradeC = 480000,
-                valueMaxGradeC = 560000,
-                localMarketAnalysis = "Highly competitive model. High resale value due to the extreme camera quality and S-Pen. Note that dual-SIM physically unlocked versions draw a 15,000 NGN premium over carrier-unlocked devices.",
-                screenVerificationTips = "1. Dial *#0*# on the dialer to load the hardware test screen.\n2. Tap 'Red', 'Green', and 'Blue' to inspect for screen burn-ins, which usually appear on the bottom navigation zone.",
-                batteryInspectionTips = "1. Watch the battery drain speed during high resolution video recording.\n2. Check AccuBattery stats or inspect device temperature; bulging rear panels mean immediate replacement is required.",
-                lockVerificationTips = "1. Check for Active Samsung Accounts.\n2. Verify the Knox security level in Settings to confirm the device is Knox-unlocked.",
-                standardRepairsWarning = "Test the S-Pen's bluetooth connection. Also verify that the USB port handles Super Fast Charging 2.0 without warming up excessively."
-            )
-            isLaptop -> GadgetAnalysisResult(
-                name = "HP EliteBook 840 G8",
-                brand = "HP",
-                model = "EliteBook 840 G8",
-                category = "Laptop",
-                estimatedSpecs = "Core i7 11th Gen, 16GB RAM, 512GB SSD, 14-inch IPS Screen, Backlit Keyboard",
-                valueMinGradeA = 380000,
-                valueMaxGradeA = 440000,
-                valueMinGradeB = 300000,
-                valueMaxGradeB = 350000,
-                valueMinGradeC = 220000,
-                valueMaxGradeC = 280000,
-                localMarketAnalysis = "HP is the official remote workforce favorite in Lagos! EliteBooks are heavily sought after by corporate operators and developers due to dual-fan configurations and repairability in Computer Village.",
-                screenVerificationTips = "1. Check for keyboard imprints or pressure white spots on the screen overlay.\n2. Rotate screen to full viewing angle to assess panel brightness stability.",
-                batteryInspectionTips = "1. Run Command Prompt as administrator and execute 'powercfg /batteryreport'.\n2. Multiply design capacity by full charge capacity to verify state.",
-                lockVerificationTips = "1. Boot into BIOS to affirm there is absolutely no supervisor or corporate encryption lock.\n2. Ensure Computrace or absolute persistent locks are not activated.",
-                standardRepairsWarning = "Verify that both USB-C Thunderbolt ports safely charge the device, and check keys like 'E', 'A', 'Space' which collect dust easily."
-            )
-            else -> GadgetAnalysisResult( // Generic fallbacks
-                name = if (queryText.isEmpty()) "Generic Smart Phone (128GB)" else "$queryText (128GB)",
-                brand = "Generic",
-                model = queryText.ifEmpty { "Android Phone" },
-                category = "Phone",
-                estimatedSpecs = "128GB Storage, 8GB RAM, Octa-Core processor, 4G LTE",
-                valueMinGradeA = 120000,
-                valueMaxGradeA = 150000,
-                valueMinGradeB = 90000,
-                valueMaxGradeB = 115000,
-                valueMinGradeC = 60000,
-                valueMaxGradeC = 85000,
-                localMarketAnalysis = "Standard market values apply. This device represents an entry to medium-level smartphone. It is widely repairable with universal parts readily available in Computer Village.",
-                screenVerificationTips = "1. Test touchscreen limits using a drawing app or dragging an app icon everywhere.\n2. Check for screen light-leakage around edges.",
-                batteryInspectionTips = "1. Verify battery charge rates using standard 10W chargers.\n2. Ensure device doesn't drop more than 2% battery within 3 minutes of idle.",
-                lockVerificationTips = "1. Ensure both Google and OEM accounts are completely signed out.",
-                standardRepairsWarning = "Common failures on standard devices include loose charging ports and broken headphone sockets."
-            )
+        val queryCleaned = queryText.trim()
+        val queryLower = queryCleaned.lowercase()
+        
+        // 1. Determine Category
+        val category = when {
+            queryLower.contains("watch") || queryLower.contains("band") || queryLower.contains("wear") || queryLower.contains("gear") -> "Smartwatch"
+            queryLower.contains("ipad") || queryLower.contains("tablet") || queryLower.contains("tab") -> "Tablet"
+            queryLower.contains("macbook") || queryLower.contains("laptop") || queryLower.contains("notebook") || queryLower.contains("book") || queryLower.contains("elitebook") || queryLower.contains("thinkpad") || queryLower.contains("latitude") || queryLower.contains("yoga") || queryLower.contains("spectre") -> "Laptop"
+            else -> "Phone"
         }
+
+        // 2. Determine Brand
+        val brand = when {
+            queryLower.contains("iphone") || queryLower.contains("apple") || queryLower.contains("ipad") || queryLower.contains("macbook") || queryLower.contains("iwatch") -> "Apple"
+            queryLower.contains("samsung") || queryLower.contains("galaxy") -> "Samsung"
+            queryLower.contains("google") || queryLower.contains("pixel") -> "Google"
+            queryLower.contains("infinix") -> "Infinix"
+            queryLower.contains("tecno") -> "Tecno"
+            queryLower.contains("xiaomi") || queryLower.contains("redmi") || queryLower.contains("poco") -> "Xiaomi"
+            queryLower.contains("hp") || queryLower.contains("elitebook") || queryLower.contains("probook") -> "HP"
+            queryLower.contains("dell") || queryLower.contains("latitude") || queryLower.contains("inspiron") || queryLower.contains("xps") -> "Dell"
+            queryLower.contains("lenovo") || queryLower.contains("thinkpad") || queryLower.contains("ideapad") -> "Lenovo"
+            queryLower.contains("asus") || queryLower.contains("rog") || queryLower.contains("zenbook") -> "Asus"
+            queryLower.contains("acer") || queryLower.contains("aspire") || queryLower.contains("predator") -> "Acer"
+            else -> {
+                val words = queryCleaned.split("\\s+".toRegex())
+                val firstWord = words.firstOrNull()?.replace("[^a-zA-Z]".toRegex(), "")
+                if (!firstWord.isNullOrBlank() && firstWord.length >= 2) {
+                    firstWord.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+                } else {
+                    "Generic"
+                }
+            }
+        }
+
+        // 3. Determine Model name
+        var model = queryCleaned
+        if (queryCleaned.isEmpty()) {
+            model = when (category) {
+                "Smartwatch" -> "Apple Watch Series 8"
+                "Tablet" -> "iPad Air 5"
+                "Laptop" -> "HP EliteBook 840 G8"
+                else -> "iPhone 13 Pro"
+            }
+        }
+
+        // 4. Dynamic base prices based on category, brand, and recognized numeric tags in query
+        var basePrice = 180000L
+        
+        // Find numbers in query (e.g. "15", "14", "13", "12", "11", "24", "23", "22", "21")
+        val numbersInQuery = "[0-9]+".toRegex().findAll(queryLower).map { it.value.toLongOrNull() ?: 0L }.toList()
+        val primeNumber = numbersInQuery.firstOrNull { it in 6..25 || it in 20..24 || it in 100..1524 } ?: 0L
+
+        if (brand == "Apple") {
+            basePrice = when (category) {
+                "Laptop" -> {
+                    if (queryLower.contains("pro")) 650000L else 420000L
+                }
+                "Tablet" -> {
+                    if (queryLower.contains("pro")) 520000L else 310000L
+                }
+                "Smartwatch" -> {
+                    if (queryLower.contains("ultra")) 340000L else 160000L
+                }
+                else -> { // Phone
+                    when (primeNumber) {
+                        15L -> 950000L
+                        14L -> 720000L
+                        13L -> 520000L
+                        12L -> 390000L
+                        11L -> 270000L
+                        in 6L..10L -> 150000L
+                        else -> {
+                            if (queryLower.contains("pro max")) 780000L
+                            else if (queryLower.contains("pro")) 550000L
+                            else 350000L
+                        }
+                    }
+                }
+            }
+        } else if (brand == "Samsung") {
+            basePrice = when (category) {
+                "Laptop" -> 350000L
+                "Tablet" -> {
+                    if (queryLower.contains("ultra") || queryLower.contains("s8") || queryLower.contains("s9")) 440000L else 190000L
+                }
+                "Smartwatch" -> 950000L
+                else -> { // Phone
+                    when (primeNumber) {
+                        24L -> 920000L
+                        23L -> 680000L
+                        22L -> 480000L
+                        21L -> 310000L
+                        20L -> 220000L
+                        else -> {
+                            if (queryLower.contains("ultra") || queryLower.contains("fold")) 580000L
+                            else if (queryLower.contains("flip") || queryLower.contains("plus")) 340000L
+                            else 190000L
+                        }
+                    }
+                }
+            }
+        } else if (category == "Laptop") {
+            // Other laptop brands
+            basePrice = when {
+                queryLower.contains("i9") || queryLower.contains("ryzen 9") -> 550000L
+                queryLower.contains("i7") || queryLower.contains("ryzen 7") -> 390000L
+                queryLower.contains("i5") || queryLower.contains("ryzen 5") -> 280000L
+                else -> 210000L
+            }
+        } else {
+            // Android alternatives like Google Pixel, Xiaomi, Infinix, Tecno
+            basePrice = when (brand) {
+                "Google" -> {
+                    when (primeNumber) {
+                        8L -> 460000L
+                        7L -> 330000L
+                        6L -> 220000L
+                        else -> 190000L
+                    }
+                }
+                "Xiaomi" -> {
+                    if (queryLower.contains("ultra") || queryLower.contains("t")) 360000L else 140000L
+                }
+                "Infinix", "Tecno" -> {
+                    if (queryLower.contains("vip") || queryLower.contains("pro") || queryLower.contains("phantom")) 150000L else 90000L
+                }
+                else -> 130000L
+            }
+        }
+
+        // Adjust value grades dynamically
+        val valueMinGradeA = ((basePrice * 1.05).toLong() / 5000L) * 5000L
+        val valueMaxGradeA = ((basePrice * 1.15).toLong() / 5000L) * 5000L
+        val valueMinGradeB = ((basePrice * 0.85).toLong() / 5000L) * 5000L
+        val valueMaxGradeB = ((basePrice * 0.95).toLong() / 5000L) * 5000L
+        val valueMinGradeC = ((basePrice * 0.65).toLong() / 5000L) * 5000L
+        val valueMaxGradeC = ((basePrice * 0.75).toLong() / 5000L) * 5000L
+
+        // 5. Build dynamic specifications
+        val estimatedSpecs = when (category) {
+            "Phone" -> {
+                val ram = if (basePrice > 400000L) "8GB RAM" else "6GB RAM"
+                val rom = if (basePrice > 600000L) "256GB Storage" else if (basePrice > 250000L) "128GB Storage" else "64GB Storage"
+                "Super Retina AMOLED Screen, $rom, $ram, Octa-Core High Definition CPU, 4G/5G Network, Verified Mainboards"
+            }
+            "Laptop" -> {
+                val ram = if (basePrice > 450000L) "16GB DDR4 RAM" else "8GB RAM"
+                val storage = if (basePrice > 350000L) "512GB PCIe NVMe SSD" else "256GB SSD"
+                "Intel Iris Xe/M-Series High Speed Core, $ram, $storage, 14.1-inch Matte IPS Screen"
+            }
+            "Tablet" -> {
+                val storage = if (basePrice > 300000L) "128GB Internal Storage" else "64GB Storage"
+                "Premium Touch Display Engine, $storage, front-side face capture lens, WiFi + Cellular LTE support"
+            }
+            else -> "Lithium Energy Core, Standard Bluetooth Sync, Water Resistant IP68 chassis, Ambient Health Sensors"
+        }
+
+        // 6. Build dynamic local advice
+        val localMarketAnalysis = when (category) {
+            "Phone" -> "Extremely liquid swap asset. Handsets under $brand are highly sought after by customers on regional tech exchanges. Typically swaps in minutes with instant cash-out available."
+            "Laptop" -> "Very stable trading liquidity. In regional remote workforces, laptop platforms by $brand retain excellent residual worth. Easy swap options are widely supported by specialized trade-in networks."
+            "Tablet" -> "Fairly high liquidity rating. Swaps are mostly accepted at premium refurbishment networks. Ensure you package the original active stylus if applicable for 10% valuation boost."
+            else -> "Medium swap-grade asset. Mainly exchanged through dedicated online portals or boutique tech retail stands inside local shopping malls."
+        }
+
+        // 7. Dynamic check procedures
+        val screenVerificationTips = when (category) {
+            "Phone" -> "1. Pull down panel to confirm TrueTone or automatic color shifting is fully calibrated.\n2. Tap multiple positions on a solid white canvas to verify touch matrix consistency and check for burn-ins or pink guidelines."
+            "Laptop" -> "1. Power up and check for keyboard marks, light spots, or screen pressure bleeding under pure black backdrop.\n2. Tilt screen back and forth to ensure there's no erratic screen glitch or ribbon cable failures."
+            "Tablet" -> "1. Swipe across the drawing app using any capacitive accessory to check for blind pixels.\n2. Apply continuous high-brightness screen view and inspect corner edges for orange color aging."
+            else -> "1. Ensure touch activation operates at normal speeds and has zero color bleeding points."
+        }
+
+        val batteryInspectionTips = when (category) {
+            "Phone" -> "1. Go to Settings and view the Battery performance percentage.\n2. If it is lower than 80%, suggest changing battery. Ensure there are no 'Important Message' notifications indicating unauthorized repairs."
+            "Laptop" -> "1. Launch terminal and run the standard battery report command.\n2. Review cycle history count. If it exceeds 500 cycles, the battery is approaching secondary degradation."
+            else -> "1. Inspect for bulging or slightly pushed-out backplates which indicate worn lithium expansion.\n2. Check for unexpected high drops (e.g. 10% in 5 minutes layout testing)."
+        }
+
+        val lockVerificationTips = when (category) {
+            "Phone" -> "1. Ensure no Apple iCloud, Google OEM register, or retail carrier locks are tied.\n2. Try full physical erase and start setup. Any MDM or profile login demands mean it is lock-tied."
+            "Laptop" -> "1. Restart and enter UEFI settings to confirm there are absolutely no BIOS supervisor passwords.\n2. Check Computrace recovery locks inside persistent memory lanes."
+            else -> "1. Perform a complete account log-out process to clean secure locks on standard processors."
+        }
+
+        val standardRepairsWarning = when (category) {
+            "Phone" -> "Carefully audit the fingerprint module or front FaceID scanners, as replacement screen repairs often disable biometrics permanently on typical $brand devices."
+            "Laptop" -> "Examine all active peripheral USB ports, Thunderbolt links, and the structural charging input sockets, as heat cycles often crack the solder anchors."
+            else -> "Be cautious of volume toggle keys and speakers, which are prone to dust aggregation and physical degradation."
+        }
+
+        return GadgetAnalysisResult(
+            name = model,
+            brand = brand,
+            model = model,
+            category = category,
+            estimatedSpecs = estimatedSpecs,
+            valueMinGradeA = valueMinGradeA,
+            valueMaxGradeA = valueMaxGradeA,
+            valueMinGradeB = valueMinGradeB,
+            valueMaxGradeB = valueMaxGradeB,
+            valueMinGradeC = valueMinGradeC,
+            valueMaxGradeC = valueMaxGradeC,
+            localMarketAnalysis = localMarketAnalysis,
+            screenVerificationTips = screenVerificationTips,
+            batteryInspectionTips = batteryInspectionTips,
+            lockVerificationTips = lockVerificationTips,
+            standardRepairsWarning = standardRepairsWarning
+        )
     }
 }

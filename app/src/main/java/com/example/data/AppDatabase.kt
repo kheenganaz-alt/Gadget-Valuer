@@ -6,13 +6,14 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [ValuationHistory::class, SavedComparison::class],
-    version = 1,
+    entities = [ValuationHistory::class, SavedComparison::class, VendorShop::class],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun valuationDao(): ValuationDao
     abstract fun comparisonDao(): ComparisonDao
+    abstract fun vendorDao(): VendorDao
 
     companion object {
         @Volatile
