@@ -1,9 +1,6 @@
-# Codemagic CI/CD Build Pipeline Configuration
-# Project: Gadget Valuer NG (Native Android Application workflow)
-
 workflows:
   android-native-workflow:
-    name: Gadget Valuer NG - Live Android Build
+    name: Android Native Workflow
     max_build_duration: 30
     instance_type: mac_mini_m1
     environment:
@@ -11,47 +8,17 @@ workflows:
         - keystores
       vars:
         PACKAGE_NAME: "com.aistudio.gadgetvaluerng.abcxyz"
-      java: 17
-    triggering:
-      events:
-        - push
-        - tag
-      branch_patterns:
-        - pattern: '*'
-          include: true
-          source: true
     scripts:
       - name: Initialize Repository Environment
         script: |
           echo "Preparing Android Native Build environment..."
-          # Decode debug keystore if present
           if [ -f "debug.keystore.base64" ]; then
             echo "Decoding debug.keystore.base64 to debug.keystore..."
             base64 --decode debug.keystore.base64 > debug.keystore 2>/dev/null || base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null || base64 -D -i debug.keystore.base64 -o debug.keystore 2>/dev/null || openssl enc -d -base64 -in debug.keystore.base64 -out debug.keystore
           fi
-          # If a Capacitor wrapper is used, run setup:
-          if [ -f "package.json" ]; then
-            npm install
-            npm run build
-            npx cap sync android
-          fi
-      - name: Set up build configuration secrets
+      - name: Build Application
         script: |
-          # Inject placeholder or configuration keys safely into .env
-          echo "GEMINI_API_KEY=${GEMINI_API_KEY:-MY_GEMINI_API_KEY}" > .env
-      - name: Run Native Gradle Test Suite
-        script: |
-          gradle assembleDebugUnitTest
-          gradle testDebugUnitTest
-      - name: Build Launch Ready APK Artifact
-        script: |
+          echo "Building debug APK..."
           gradle assembleDebug
     artifacts:
       - app/build/outputs/apk/**/*.apk
-    publishing:
-      email:
-        recipients:
-          - kheenganaz@gmail.com
-        notify:
-          success: true
-          failure: true

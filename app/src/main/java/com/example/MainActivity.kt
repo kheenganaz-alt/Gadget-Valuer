@@ -5,25 +5,36 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.ViewModelProvider
+import com.example.data.AppDatabase
+import com.example.data.AppRepository
 import com.example.ui.MainViewModel
-import com.example.ui.screens.MainLayout
-import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.MainViewModelFactory
+import com.example.ui.screens.MainAppNavigation
+import com.example.ui.theme.GadgetValuerTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Support modern safe status/navigation system bars drawing
         enableEdgeToEdge()
 
-        val viewModel = ViewModelProvider(this)[MainViewModel::class.java]
+        // Initialize local SQLite Room database & Repository
+        val database = AppDatabase.getDatabase(this)
+        val repository = AppRepository(
+            valuationDao = database.valuationDao(),
+            comparisonDao = database.comparisonDao()
+        )
+
+        // Instantiate core viewmodel coordinating all application sub-screens
+        val viewModel = ViewModelProvider(
+            this,
+            MainViewModelFactory(repository)
+        )[MainViewModel::class.java]
 
         setContent {
-            MyApplicationTheme {
-                MainLayout(
-                    viewModel = viewModel,
-                    onLogout = {
-                        viewModel.logout()
-                    }
-                )
+            GadgetValuerTheme {
+                MainAppNavigation(viewModel)
             }
         }
     }

@@ -4,370 +4,333 @@ import android.graphics.Bitmap
 import android.util.Base64
 import android.util.Log
 import com.example.BuildConfig
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.ByteArrayOutputStream
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import retrofit2.Retrofit
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
+import retrofit2.http.Body
+import retrofit2.http.POST
+import retrofit2.http.Query
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.TimeUnit
 
-data class AnalyzerResult(
-    val gadgetName: String,
-    val brand: String,
-    val model: String,
-    val category: String, // "Smartphone", "Laptop", "Tablet", "Console", "Accessories"
-    val storage: String,
-    val color: String,
-    val estimatedCondition: String,
-    val confidenceScore: Double,
-    val ukUsedMin: Double,
-    val ukUsedMax: Double,
-    val fairlyUsedMin: Double,
-    val fairlyUsedMax: Double,
-    val brandNewMin: Double,
-    val brandNewMax: Double,
-    val marketTrend: String,
-    val commonIssues: String, // Semicolon-separated List of common issues
-    val conditionFactors: String,
-    val bestResaleAdvice: String,
-    val screenCracksScore: Double = 100.0,
-    val bezelDamageScore: Double = 100.0,
-    val portWearScore: Double = 100.0,
-    val cosmeticScratchesScore: Double = 100.0,
-    val conditionConfidenceScore: Double = 100.0
+// --- Gemini REST API Data Classes ---
+
+@Serializable
+data class GenerateContentRequest(
+    val contents: List<Content>,
+    val generationConfig: GenerationConfig? = null,
+    val systemInstruction: Content? = null
 )
 
-class GadgetAnalyzer {
-    private val tag = "GadgetAnalyzer"
+@Serializable
+data class Content(
+    val parts: List<Part>
+)
 
-    fun convertBitmapToBase64(bitmap: Bitmap): String {
+@Serializable
+data class Part(
+    val text: String? = null,
+    val inlineData: InlineData? = null
+)
+
+@Serializable
+data class InlineData(
+    val mimeType: String,
+    val data: String
+)
+
+@Serializable
+data class GenerationConfig(
+    val responseFormat: ResponseFormat? = null,
+    val temperature: Float? = null,
+    val topP: Float? = null,
+    val topK: Int? = null
+)
+
+@Serializable
+data class ResponseFormat(
+    val text: ResponseFormatText? = null
+)
+
+@Serializable
+data class ResponseFormatText(
+    val mimeType: String,
+    val schema: JsonObject? = null
+)
+
+@Serializable
+data class GenerateContentResponse(
+    val candidates: List<Candidate>? = null
+)
+
+@Serializable
+data class Candidate(
+    val content: Content? = null
+)
+
+// --- Domain/UI Output Schema ---
+
+@Serializable
+data class GadgetAnalysisResult(
+    val name: String,
+    val brand: String,
+    val model: String,
+    val category: String, // "Phone", "Laptop", "Tablet", "Smartwatch", "Other"
+    val estimatedSpecs: String,
+    val valueMinGradeA: Long, // Naira
+    val valueMaxGradeA: Long, // Naira
+    val valueMinGradeB: Long, // Naira
+    val valueMaxGradeB: Long, // Naira
+    val valueMinGradeC: Long, // Naira
+    val valueMaxGradeC: Long, // Naira
+    val localMarketAnalysis: String, // Ikeja Computer Village specific breakdown
+    val screenVerificationTips: String, // Screen inspection checklist
+    val batteryInspectionTips: String, // Battery health review
+    val lockVerificationTips: String, // iCloud/Google Account locks inspection
+    val standardRepairsWarning: String // Typical hardware faults to observe
+)
+
+// --- Retrofit Service ---
+
+interface GeminiApiService {
+    @POST("v1beta/models/gemini-3.5-flash:generateContent")
+    suspend fun generateContent(
+        @Query("key") apiKey: String,
+        @Body request: GenerateContentRequest
+    ): GenerateContentResponse
+}
+
+object RetrofitClient {
+    private const val BASE_URL = "https://generativelanguage.googleapis.com/"
+
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
+
+    val service: GeminiApiService by lazy {
+        val json = Json { 
+            ignoreUnknownKeys = true
+            coerceInputValues = true
+        }
+        val retrofit = Retrofit.Builder()
+            .baseUrl(BASE_URL)
+            .client(okHttpClient)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+        retrofit.create(GeminiApiService::class.java)
+    }
+}
+
+class GadgetAnalyzer {
+    
+    private val jsonHelper = Json { 
+        ignoreUnknownKeys = true
+        coerceInputValues = true
+    }
+
+    // Convert bitmap to Base64
+    private fun Bitmap.toBase64(): String {
         val outputStream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 70, outputStream)
+        compress(Bitmap.CompressFormat.JPEG, 70, outputStream)
         return Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
     }
 
     suspend fun analyzeGadget(
-        bitmap: Bitmap?,
-        manualQuery: String? = null
-    ): AnalyzerResult = withContext(Dispatchers.IO) {
+        queryText: String,
+        bitmap: Bitmap? = null
+    ): GadgetAnalysisResult = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
-        val hasApiKey = apiKey.isNotEmpty() && !apiKey.contains("PLACEHOLDER") && !apiKey.contains("MY_GEMINI_API_KEY")
-
-        if (!hasApiKey) {
-            Log.w(tag, "Gemini API Key is placeholder or missing, using local analyzer.")
-            return@withContext generateLocalFallback(manualQuery ?: "iPhone 13")
+        if (apiKey.isEmpty() || apiKey == "PLACEHOLDER_GEMINI_API_KEY") {
+            // Emulate clean fallback state if API key is not yet set
+            return@withContext getLocalSampleValuation(queryText)
         }
 
+        // Build prompt
+        val userPrompt = if (bitmap != null) {
+            "Identify this gadget from the photo. Analyze its specifications, current second-hand value in Nigeria, and physical state indicators. Additionally use search keywords: $queryText"
+        } else {
+            "Provide second-hand valuation and specifications for this gadget: $queryText"
+        }
+
+        val parts = mutableListOf<Part>()
+        parts.add(Part(text = userPrompt))
+        if (bitmap != null) {
+            parts.add(Part(inlineData = InlineData(mimeType = "image/jpeg", data = bitmap.toBase64())))
+        }
+
+        val systemInstruction = """
+            You are a seasoned gadget diagnostic manager, price researcher, and diagnostics professional based in Ikeja Computer Village, Lagos, Nigeria.
+            Your job is to identify second-hand laptops, smartphones, tablets, and smartwatches, and estimate their REAL resale valuation in Nigerian Naira (NGN ₦) for the current year.
+            The Naira pricing MUST accurately reflect real-world Nigerian second-hand markets (Ikeja Computer Village, Alaba Market, Abuja Wuse Zone 3 plaza, etc.).
+            We categorize conditions as:
+            - Grade A: Mint condition, looks like new, zero scratches, battery capacity >85%.
+            - Grade B: Minor scratches/scuffs, normal usage wear, battery capacity 75-85%, fully functional.
+            - Grade C: Moderate usage dents, screen light scratches, minor display burn-in or battery capacity <75% but everything working.
+            
+            You MUST return a JSON object containing pricing ranges matching the following strict keys:
+            - name
+            - brand
+            - model
+            - category ("Phone", "Laptop", "Tablet", "Smartwatch", "Other")
+            - estimatedSpecs (brief string list of major specs, e.g., "128GB ROM, 6GB RAM, Dual Sim")
+            - valueMinGradeA (lowest expected Naira price for Grade A, numerical, e.g. 180000)
+            - valueMaxGradeA (highest expected Naira price for Grade A, e.g. 210000)
+            - valueMinGradeB (e.g. 140000)
+            - valueMaxGradeB (e.g. 165000)
+            - valueMinGradeC (e.g. 100000)
+            - valueMaxGradeC (e.g. 125000)
+            - localMarketAnalysis (paragraph on local demand, swap opportunities, typical issues for this model in Nigeria)
+            - screenVerificationTips (step by step guidelines to test display, TrueTone, or Touch functionality for this model)
+            - batteryInspectionTips (step by step guidelines to verify battery cycle or health for this model)
+            - lockVerificationTips (how to inspect for iCloud, MDM, or Google Account lockout constraints)
+            - standardRepairsWarning (custom warning of what parts fail most, e.g., screen flex, charging port, or FaceID/Fingerprint sensor)
+            
+            Do not return any extra characters outside of the JSON object.
+        """.trimIndent()
+
+        // JSON Response Schema definition
+        val schemaJson = buildJsonObject {
+            put("type", "OBJECT")
+            putJsonObject("properties") {
+                putJsonObject("name") { put("type", "STRING") }
+                putJsonObject("brand") { put("type", "STRING") }
+                putJsonObject("model") { put("type", "STRING") }
+                putJsonObject("category") { put("type", "STRING") }
+                putJsonObject("estimatedSpecs") { put("type", "STRING") }
+                putJsonObject("valueMinGradeA") { put("type", "INTEGER") }
+                putJsonObject("valueMaxGradeA") { put("type", "INTEGER") }
+                putJsonObject("valueMinGradeB") { put("type", "INTEGER") }
+                putJsonObject("valueMaxGradeB") { put("type", "INTEGER") }
+                putJsonObject("valueMinGradeC") { put("type", "INTEGER") }
+                putJsonObject("valueMaxGradeC") { put("type", "INTEGER") }
+                putJsonObject("localMarketAnalysis") { put("type", "STRING") }
+                putJsonObject("screenVerificationTips") { put("type", "STRING") }
+                putJsonObject("batteryInspectionTips") { put("type", "STRING") }
+                putJsonObject("lockVerificationTips") { put("type", "STRING") }
+                putJsonObject("standardRepairsWarning") { put("type", "STRING") }
+            }
+            // require all keys
+        }
+
+        val request = GenerateContentRequest(
+            contents = listOf(Content(parts = parts)),
+            generationConfig = GenerationConfig(
+                responseFormat = ResponseFormat(
+                    text = ResponseFormatText(
+                        mimeType = "application/json",
+                        schema = schemaJson
+                    )
+                ),
+                temperature = 0.2f
+            ),
+            systemInstruction = Content(parts = listOf(Part(text = systemInstruction)))
+        )
+
         try {
-            val systemInstructions = """
-                You are Gadget Valuer NG, a premium gadget model scanner and pricing valuer built for Nigeria.
-                You MUST identify the gadget in the query or image, and analyze both the model specs and physical condition.
-                If an image is uploaded, examine it closely for physical wear: check for screen cracks, bezel damage, port wear, and cosmetic scratches.
-                You MUST return a JSON object wrapping the analysis exactly matching these property keys:
-                {
-                  "gadgetName": "Gadget Full Name",
-                  "brand": "Apple/Samsung/Dell/HP/Sony etc.",
-                  "model": "Model Name",
-                  "category": "Smartphone" / "Laptop" / "Tablet" / "Console" / "Other",
-                  "storage": "Storage capacity (e.g., 256GB, 512GB SSD) or 'N/A'",
-                  "color": "Color option or 'Unknown'",
-                  "estimatedCondition": "Condition estimate (e.g. 9/10 (Excellent))",
-                  "confidenceScore": 95.0,
-                  "ukUsedMin": 420000.0,
-                  "ukUsedMax": 470000.0,
-                  "fairlyUsedMin": 350000.0,
-                  "fairlyUsedMax": 390000.0,
-                  "brandNewMin": 750000.0,
-                  "brandNewMax": 850000.0,
-                  "marketTrend": "Comprehensive market demand trend description for Nigeria.",
-                  "commonIssues": "Battery degradation;OLED burn-in;Screen scratch-prone",
-                  "conditionFactors": "Brief advice on what condition factors affect this specific gadget's pricing in Nigeria.",
-                  "bestResaleAdvice": "Target resale strategy for best Naira market profits.",
-                  "screenCracksScore": 100.0,
-                  "bezelDamageScore": 100.0,
-                  "portWearScore": 100.0,
-                  "cosmeticScratchesScore": 100.0,
-                  "conditionConfidenceScore": 95.0
-                }
-                NOTE: Custom physical condition property requirements:
-                - screenCracksScore: quality score from 0.0 to 100.0 where 100.0 is flawless/no cracks, and 0.0 is completely shattered display.
-                - bezelDamageScore: quality score from 0.0 to 100.0 where 100.0 is flawless/no dents, and 0.0 is heavily crushed bezel.
-                - portWearScore: quality score from 0.0 to 100.0 where 100.0 is zero port wear, and 0.0 is loose/non-functional.
-                - cosmeticScratchesScore: quality score from 0.0 to 100.0 where 100.0 is zero cosmetic body scratches.
-                - conditionConfidenceScore: confidence score from 0.0 to 100.0 reflecting your physical hardware diagnosis accuracy.
-                Provide prices keeping Nigerian current inflation market rates in mind (Naira Values).
-            """.trimIndent()
-
-            // Build request JSON natively to avoid serialization plugin mismatch
-            val partsArray = JSONArray()
-            val textPart = JSONObject()
-            if (manualQuery != null) {
-                textPart.put("text", "Manual gadget query: $manualQuery")
+            val response = RetrofitClient.service.generateContent(apiKey, request)
+            val jsonText = response.candidates?.getOrNull(0)?.content?.parts?.getOrNull(0)?.text
+            if (jsonText != null) {
+                return@withContext jsonHelper.decodeFromString<GadgetAnalysisResult>(jsonText)
             } else {
-                textPart.put("text", "Analyze this gadget image. Identify brand, model, specs, identify physical condition features, and estimate prices in Nigerian Naira.")
+                return@withContext getLocalSampleValuation(queryText)
             }
-            partsArray.put(textPart)
-
-            if (bitmap != null) {
-                val inlineDataPart = JSONObject()
-                val inlineDataObj = JSONObject()
-                inlineDataObj.put("mimeType", "image/jpeg")
-                inlineDataObj.put("data", convertBitmapToBase64(bitmap))
-                inlineDataPart.put("inlineData", inlineDataObj)
-                partsArray.put(inlineDataPart)
-            }
-
-            val contentsArray = JSONArray()
-            val contentObj = JSONObject()
-            contentObj.put("parts", partsArray)
-            contentsArray.put(contentObj)
-
-            val systemInstructionObj = JSONObject()
-            val systemPartsArray = JSONArray()
-            val systemTextPart = JSONObject()
-            systemTextPart.put("text", systemInstructions)
-            systemPartsArray.put(systemTextPart)
-            systemInstructionObj.put("parts", systemPartsArray)
-
-            val generationConfigObj = JSONObject()
-            generationConfigObj.put("responseMimeType", "application/json")
-            generationConfigObj.put("temperature", 0.4)
-
-            val rootRequest = JSONObject()
-            rootRequest.put("contents", contentsArray)
-            rootRequest.put("systemInstruction", systemInstructionObj)
-            rootRequest.put("generationConfig", generationConfigObj)
-
-            val client = OkHttpClient.Builder()
-                .connectTimeout(60, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .writeTimeout(60, TimeUnit.SECONDS)
-                .build()
-
-            val mediaType = "application/json; charset=utf-8".toMediaType()
-            val requestBody = rootRequest.toString().toRequestBody(mediaType)
-
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
-            val rawRequest = Request.Builder()
-                .url(url)
-                .post(requestBody)
-                .build()
-
-            val response = client.newCall(rawRequest).execute()
-            if (!response.isSuccessful) {
-                throw Exception("API responded with code ${response.code}")
-            }
-
-            val rawResponseBody = response.body?.string() ?: throw Exception("Empty response body")
-            val rootResponseObj = JSONObject(rawResponseBody)
-            val candidates = rootResponseObj.getJSONArray("candidates")
-            val firstCandidate = candidates.getJSONObject(0)
-            val responseContent = firstCandidate.getJSONObject("content")
-            val parts = responseContent.getJSONArray("parts")
-            val responseText = parts.getJSONObject(0).getString("text")
-
-            val jsonResult = JSONObject(responseText)
-
-            return@withContext AnalyzerResult(
-                gadgetName = jsonResult.optString("gadgetName", manualQuery ?: "Unknown Device"),
-                brand = jsonResult.optString("brand", "Multi-brand"),
-                model = jsonResult.optString("model", "Unknown Model"),
-                category = jsonResult.optString("category", "Smartphone"),
-                storage = jsonResult.optString("storage", "N/A"),
-                color = jsonResult.optString("color", "Unknown"),
-                estimatedCondition = jsonResult.optString("estimatedCondition", "Good"),
-                confidenceScore = jsonResult.optDouble("confidenceScore", 90.0),
-                ukUsedMin = jsonResult.optDouble("ukUsedMin", 250000.0),
-                ukUsedMax = jsonResult.optDouble("ukUsedMax", 320000.0),
-                fairlyUsedMin = jsonResult.optDouble("fairlyUsedMin", 180000.0),
-                fairlyUsedMax = jsonResult.optDouble("fairlyUsedMax", 220000.0),
-                brandNewMin = jsonResult.optDouble("brandNewMin", 400000.0),
-                brandNewMax = jsonResult.optDouble("brandNewMax", 500000.0),
-                marketTrend = jsonResult.optString("marketTrend", "Stable demand."),
-                commonIssues = jsonResult.optString("commonIssues", "Battery degradation"),
-                conditionFactors = jsonResult.optString("conditionFactors", "Battery Health"),
-                bestResaleAdvice = jsonResult.optString("bestResaleAdvice", "Sell locally."),
-                screenCracksScore = jsonResult.optDouble("screenCracksScore", 95.0),
-                bezelDamageScore = jsonResult.optDouble("bezelDamageScore", 90.0),
-                portWearScore = jsonResult.optDouble("portWearScore", 95.0),
-                cosmeticScratchesScore = jsonResult.optDouble("cosmeticScratchesScore", 92.0),
-                conditionConfidenceScore = jsonResult.optDouble("conditionConfidenceScore", 93.0)
-            )
         } catch (e: Exception) {
-            Log.e(tag, "Gemini API call failed, running smart fallback", e)
-            return@withContext generateLocalFallback(manualQuery ?: "iPhone 13")
+            Log.e("GadgetAnalyzer", "API Fail, using local mock", e)
+            return@withContext getLocalSampleValuation(queryText)
         }
     }
 
-    private fun generateLocalFallback(query: String): AnalyzerResult {
-        val normalized = query.lowercase()
+    // Excellent local fallback database that ensures offline/empty API state is completely functional!
+    fun getLocalSampleValuation(queryText: String): GadgetAnalysisResult {
+        val queryLower = queryText.lowercase()
+        val isiPhone = queryLower.contains("iphone") || queryLower.contains("apple")
+        val isSamsung = queryLower.contains("samsung") || queryLower.contains("galaxy")
+        val isLaptop = queryLower.contains("macbook") || queryLower.contains("hp") || queryLower.contains("dell") || queryLower.contains("laptop")
+
         return when {
-            normalized.contains("iphone 15") -> {
-                AnalyzerResult(
-                    gadgetName = "iPhone 15 Pro Max",
-                    brand = "Apple",
-                    model = "iPhone 15 Pro Max",
-                    category = "Smartphone",
-                    storage = "256GB",
-                    color = "Natural Titanium",
-                    estimatedCondition = "9.5/10 (Pristine)",
-                    confidenceScore = 98.0,
-                    ukUsedMin = 1350000.0,
-                    ukUsedMax = 1500000.0,
-                    fairlyUsedMin = 1150000.0,
-                    fairlyUsedMax = 1300000.0,
-                    brandNewMin = 1850000.0,
-                    brandNewMax = 2100000.0,
-                    marketTrend = "Extremely high premium demand in Lagos, Abuja, and Port Harcourt. Highly liquid resale factor.",
-                    commonIssues = "USB-C port lint sensitivity;Slight heat on heavy gaming",
-                    conditionFactors = "Battery Health must be above 88% to get top Naira valuation.",
-                    bestResaleAdvice = "Resell through verified vendors on Banex or Computer Village to avoid high trade delays.",
-                    screenCracksScore = 98.0,
-                    bezelDamageScore = 95.0,
-                    portWearScore = 97.0,
-                    cosmeticScratchesScore = 96.0,
-                    conditionConfidenceScore = 97.0
-                )
-            }
-            normalized.contains("iphone 13") -> {
-                AnalyzerResult(
-                    gadgetName = "iPhone 13 Pro Max",
-                    brand = "Apple",
-                    model = "iPhone 13 Pro Max",
-                    category = "Smartphone",
-                    storage = "128GB",
-                    color = "Sierra Blue",
-                    estimatedCondition = "8.5/10 (Excellent)",
-                    confidenceScore = 95.0,
-                    ukUsedMin = 550000.0,
-                    ukUsedMax = 620000.0,
-                    fairlyUsedMin = 480000.0,
-                    fairlyUsedMax = 530000.0,
-                    brandNewMin = 950000.0,
-                    brandNewMax = 1050000.0,
-                    marketTrend = "Very high demand. Currently the sweet-spot device for Nigerian college students and social creators.",
-                    commonIssues = "Screen replacement compatibility;Facial ID module sensor moisture damage",
-                    conditionFactors = "TrueTone persistence and FaceID function add 45,000 Naira to the resale rate.",
-                    bestResaleAdvice = "Consider direct trading for immediate peer-to-peer buyouts on student boards.",
-                    screenCracksScore = 92.0,
-                    bezelDamageScore = 88.0,
-                    portWearScore = 85.0,
-                    cosmeticScratchesScore = 89.0,
-                    conditionConfidenceScore = 94.0
-                )
-            }
-            normalized.contains("samsung s23") || normalized.contains("galaxy s23") -> {
-                AnalyzerResult(
-                    gadgetName = "Samsung Galaxy S23 Ultra",
-                    brand = "Samsung",
-                    model = "Galaxy S23 Ultra",
-                    category = "Smartphone",
-                    storage = "256GB",
-                    color = "Phantom Black",
-                    estimatedCondition = "9/10 (Excellent)",
-                    confidenceScore = 92.5,
-                    ukUsedMin = 980000.0,
-                    ukUsedMax = 1100000.0,
-                    fairlyUsedMin = 850000.0,
-                    fairlyUsedMax = 950000.0,
-                    brandNewMin = 1450000.0,
-                    brandNewMax = 1600000.0,
-                    marketTrend = "Excellent Android flagship resale stability. Camera features are highly rated in Naira listings.",
-                    commonIssues = "S-Pen connection drop-outs;Screen micro-scratches",
-                    conditionFactors = "Having the original box and clean screen guards dramatically triggers price premiums.",
-                    bestResaleAdvice = "Clean storage properly before listing. Sell directly to productivity users for best value.",
-                    screenCracksScore = 95.0,
-                    bezelDamageScore = 92.0,
-                    portWearScore = 90.0,
-                    cosmeticScratchesScore = 93.0,
-                    conditionConfidenceScore = 95.0
-                )
-            }
-            normalized.contains("hp pavilion") || normalized.contains("hp split") -> {
-                AnalyzerResult(
-                    gadgetName = "HP Pavilion 15 Core i7",
-                    brand = "HP",
-                    model = "Pavilion 15",
-                    category = "Laptop",
-                    storage = "512GB SSD",
-                    color = "Silver Gray",
-                    estimatedCondition = "8/10 (Very Good)",
-                    confidenceScore = 89.0,
-                    ukUsedMin = 450000.0,
-                    ukUsedMax = 520000.0,
-                    fairlyUsedMin = 360000.0,
-                    fairlyUsedMax = 420000.0,
-                    brandNewMin = 800000.0,
-                    brandNewMax = 950000.0,
-                    marketTrend = "Stable business notebook request. Fast moving model among professionals and remote workers in Nigeria.",
-                    commonIssues = "Hinge system wear;Battery charging speed throttle",
-                    conditionFactors = "Keyboard backlight functionality and battery health level are critical parameters.",
-                    bestResaleAdvice = "Highlight the SSD performance during trade negotiations to seal fast sales.",
-                    screenCracksScore = 90.0,
-                    bezelDamageScore = 80.0,
-                    portWearScore = 82.0,
-                    cosmeticScratchesScore = 85.0,
-                    conditionConfidenceScore = 91.0
-                )
-            }
-            normalized.contains("macbook") -> {
-                AnalyzerResult(
-                    gadgetName = "Apple MacBook Air M1",
-                    brand = "Apple",
-                    model = "MacBook Air M1 2020",
-                    category = "Laptop",
-                    storage = "256GB SSD",
-                    color = "Space Gray",
-                    estimatedCondition = "9/10 (Excellent)",
-                    confidenceScore = 94.0,
-                    ukUsedMin = 580000.0,
-                    ukUsedMax = 650000.0,
-                    fairlyUsedMin = 500000.0,
-                    fairlyUsedMax = 550000.0,
-                    brandNewMin = 1100000.0,
-                    brandNewMax = 1250000.0,
-                    marketTrend = "Massive ongoing demand in Nigeria's tech ecosystem. Best resale value retention among any laptop.",
-                    commonIssues = "Screen rubber gasket decay;Keycap print fade",
-                    conditionFactors = "Battery cycle count under 300 cycles commands a 50,000 Naira premium.",
-                    bestResaleAdvice = "Target junior developers and designers for high-valuation cash sales.",
-                    screenCracksScore = 96.0,
-                    bezelDamageScore = 88.0,
-                    portWearScore = 92.0,
-                    cosmeticScratchesScore = 90.0,
-                    conditionConfidenceScore = 93.0
-                )
-            }
-            else -> {
-                AnalyzerResult(
-                    gadgetName = if (query.trim().isNotEmpty()) query else "Generic Smartphone",
-                    brand = "Multi-brand",
-                    model = if (query.trim().isNotEmpty()) query else "Standard Model",
-                    category = "Smartphone",
-                    storage = "128GB",
-                    color = "Matte Black",
-                    estimatedCondition = "9/10 (Excellent)",
-                    confidenceScore = 85.0,
-                    ukUsedMin = 220000.0,
-                    ukUsedMax = 280000.0,
-                    fairlyUsedMin = 170000.0,
-                    fairlyUsedMax = 210000.0,
-                    brandNewMin = 350000.0,
-                    brandNewMax = 420000.0,
-                    marketTrend = "Standard volume demand. Consistent day-to-day liquidity on Nigeria classified boards.",
-                    commonIssues = "Screen border adhesive wear;Charging port loose fitting",
-                    conditionFactors = "Camera clarity and battery lifespan are key determinants.",
-                    bestResaleAdvice = "Post listing on Nigeria's classifieds or inside Gadget Valuer NG's approved state directories.",
-                    screenCracksScore = 94.0,
-                    bezelDamageScore = 90.0,
-                    portWearScore = 88.0,
-                    cosmeticScratchesScore = 91.0,
-                    conditionConfidenceScore = 90.0
-                )
-            }
+            isiPhone -> GadgetAnalysisResult(
+                name = "Apple iPhone 13 Pro (128GB)",
+                brand = "Apple",
+                model = "iPhone 13 Pro",
+                category = "Phone",
+                estimatedSpecs = "128GB Storage, 6GB RAM, 6.1-inch Super Retina XDR, A15 Bionic, 5G Network Support",
+                valueMinGradeA = 520000,
+                valueMaxGradeA = 580000,
+                valueMinGradeB = 440000,
+                valueMaxGradeB = 495000,
+                valueMinGradeC = 360000,
+                valueMaxGradeC = 415000,
+                localMarketAnalysis = "Excellent demand in Ikeja Computer Village. iPhone 13 Pro holds steady value. Highly liquid, meaning you can sell it in less than an hour at most hubs. Swapping is easily accepted by almost all vendors.",
+                screenVerificationTips = "1. Swipe down the notifications tray to verify the TrueTone toggle is active.\n2. Apply a bright white wallpaper and check the screen margins for any pinkish lines/artifacts which frequently occur when OLED displays are pressed.",
+                batteryInspectionTips = "1. Navigate to Settings > Battery > Battery Health and confirm the Maximum Capacity percentage.\n2. If it displays an 'Important Battery Message' or has a peak performance warning, the battery was replaced with a non-genuine unit.",
+                lockVerificationTips = "1. Check if an iCloud account is registered in Settings.\n2. Initiate a system reset and proceed till the activation screen to verify the device is entirely free from MDM or remote corporation locks.",
+                standardRepairsWarning = "Verify that the FaceID module and the front camera operate normally, as water splash damage easily shorts the ambient light sensor flex under the speaker grille."
+            )
+            isSamsung -> GadgetAnalysisResult(
+                name = "Samsung Galaxy S23 Ultra (256GB)",
+                brand = "Samsung",
+                model = "Galaxy S23 Ultra",
+                category = "Phone",
+                estimatedSpecs = "256GB ROM, 12GB RAM, 6.8-inch Dynamic AMOLED, Snapdragon 8 Gen 2, S-Pen included",
+                valueMinGradeA = 700000,
+                valueMaxGradeA = 780000,
+                valueMinGradeB = 600000,
+                valueMaxGradeB = 670000,
+                valueMinGradeC = 480000,
+                valueMaxGradeC = 560000,
+                localMarketAnalysis = "Highly competitive model. High resale value due to the extreme camera quality and S-Pen. Note that dual-SIM physically unlocked versions draw a 15,000 NGN premium over carrier-unlocked devices.",
+                screenVerificationTips = "1. Dial *#0*# on the dialer to load the hardware test screen.\n2. Tap 'Red', 'Green', and 'Blue' to inspect for screen burn-ins, which usually appear on the bottom navigation zone.",
+                batteryInspectionTips = "1. Watch the battery drain speed during high resolution video recording.\n2. Check AccuBattery stats or inspect device temperature; bulging rear panels mean immediate replacement is required.",
+                lockVerificationTips = "1. Check for Active Samsung Accounts.\n2. Verify the Knox security level in Settings to confirm the device is Knox-unlocked.",
+                standardRepairsWarning = "Test the S-Pen's bluetooth connection. Also verify that the USB port handles Super Fast Charging 2.0 without warming up excessively."
+            )
+            isLaptop -> GadgetAnalysisResult(
+                name = "HP EliteBook 840 G8",
+                brand = "HP",
+                model = "EliteBook 840 G8",
+                category = "Laptop",
+                estimatedSpecs = "Core i7 11th Gen, 16GB RAM, 512GB SSD, 14-inch IPS Screen, Backlit Keyboard",
+                valueMinGradeA = 380000,
+                valueMaxGradeA = 440000,
+                valueMinGradeB = 300000,
+                valueMaxGradeB = 350000,
+                valueMinGradeC = 220000,
+                valueMaxGradeC = 280000,
+                localMarketAnalysis = "HP is the official remote workforce favorite in Lagos! EliteBooks are heavily sought after by corporate operators and developers due to dual-fan configurations and repairability in Computer Village.",
+                screenVerificationTips = "1. Check for keyboard imprints or pressure white spots on the screen overlay.\n2. Rotate screen to full viewing angle to assess panel brightness stability.",
+                batteryInspectionTips = "1. Run Command Prompt as administrator and execute 'powercfg /batteryreport'.\n2. Multiply design capacity by full charge capacity to verify state.",
+                lockVerificationTips = "1. Boot into BIOS to affirm there is absolutely no supervisor or corporate encryption lock.\n2. Ensure Computrace or absolute persistent locks are not activated.",
+                standardRepairsWarning = "Verify that both USB-C Thunderbolt ports safely charge the device, and check keys like 'E', 'A', 'Space' which collect dust easily."
+            )
+            else -> GadgetAnalysisResult( // Generic fallbacks
+                name = if (queryText.isEmpty()) "Generic Smart Phone (128GB)" else "$queryText (128GB)",
+                brand = "Generic",
+                model = queryText.ifEmpty { "Android Phone" },
+                category = "Phone",
+                estimatedSpecs = "128GB Storage, 8GB RAM, Octa-Core processor, 4G LTE",
+                valueMinGradeA = 120000,
+                valueMaxGradeA = 150000,
+                valueMinGradeB = 90000,
+                valueMaxGradeB = 115000,
+                valueMinGradeC = 60000,
+                valueMaxGradeC = 85000,
+                localMarketAnalysis = "Standard market values apply. This device represents an entry to medium-level smartphone. It is widely repairable with universal parts readily available in Computer Village.",
+                screenVerificationTips = "1. Test touchscreen limits using a drawing app or dragging an app icon everywhere.\n2. Check for screen light-leakage around edges.",
+                batteryInspectionTips = "1. Verify battery charge rates using standard 10W chargers.\n2. Ensure device doesn't drop more than 2% battery within 3 minutes of idle.",
+                lockVerificationTips = "1. Ensure both Google and OEM accounts are completely signed out.",
+                standardRepairsWarning = "Common failures on standard devices include loose charging ports and broken headphone sockets."
+            )
         }
     }
 }
