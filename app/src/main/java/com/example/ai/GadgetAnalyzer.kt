@@ -192,7 +192,7 @@ class GadgetAnalyzer {
             - valueMaxGradeB (e.g. 165000)
             - valueMinGradeC (e.g. 100000)
             - valueMaxGradeC (e.g. 125000)
-            - localMarketAnalysis (paragraph on local demand, swap opportunities, typical issues for this model in Nigeria)
+            - localMarketAnalysis (paragraph on local demand, buyer/seller secondary market pricing, typical issues for this model in Nigeria)
             - screenVerificationTips (step by step guidelines to test display, TrueTone, or Touch functionality for this model)
             - batteryInspectionTips (step by step guidelines to verify battery cycle or health for this model)
             - lockVerificationTips (how to inspect for iCloud, MDM, or Google Account lockout constraints)
@@ -247,7 +247,7 @@ class GadgetAnalyzer {
             } else {
                 return@withContext getLocalSampleValuation(queryText)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e("GadgetAnalyzer", "API Fail, using local mock", e)
             return@withContext getLocalSampleValuation(queryText)
         }
@@ -415,10 +415,10 @@ class GadgetAnalyzer {
 
         // 6. Build dynamic local advice
         val localMarketAnalysis = when (category) {
-            "Phone" -> "Extremely liquid swap asset. Handsets under $brand are highly sought after by customers on regional tech exchanges. Typically swaps in minutes with instant cash-out available."
-            "Laptop" -> "Very stable trading liquidity. In regional remote workforces, laptop platforms by $brand retain excellent residual worth. Easy swap options are widely supported by specialized trade-in networks."
-            "Tablet" -> "Fairly high liquidity rating. Swaps are mostly accepted at premium refurbishment networks. Ensure you package the original active stylus if applicable for 10% valuation boost."
-            else -> "Medium swap-grade asset. Mainly exchanged through dedicated online portals or boutique tech retail stands inside local shopping malls."
+            "Phone" -> "Extremely liquid market asset. Handsets under $brand are highly sought after by buyers and sellers on regional tech exchanges. Typically resells in minutes with instant cash-out available."
+            "Laptop" -> "Very stable trading liquidity. In regional remote workforces, laptop platforms by $brand retain excellent residual worth. Easy resale and trade options are widely supported by specialized networks."
+            "Tablet" -> "Fairly high liquidity rating. These are mostly sought after at premium refurbishment and sales networks. Ensure you package the original active stylus if applicable for 10% valuation boost."
+            else -> "Medium-demand market asset. Mainly exchanged through dedicated online portals or boutique tech retail stands inside local shopping malls."
         }
 
         // 7. Dynamic check procedures

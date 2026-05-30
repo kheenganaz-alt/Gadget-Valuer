@@ -41,11 +41,22 @@ data class SavedComparison(
 data class VendorShop(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val name: String,
-    val center: String,
-    val details: String,
+    val center: String = "", // backwards compatible
+    val details: String = "", // backwards compatible
+    val ownerName: String = "",
+    val phone: String = "",
+    val whatsapp: String = "",
+    val email: String = "",
+    val state: String = "Lagos", // default operating state
+    val city: String = "",
+    val address: String = "",
+    val categories: String = "Phones, Laptops, Accessories",
+    val logoUrl: String? = null,
+    val verificationDocUrl: String? = null,
+    val isVerified: Boolean = false,
     val ratings: Double = 4.5,
-    val specialization: String,
-    val telephone: String,
-    val status: String = "approved", // "pending" of "approved"
+    val specialization: String = "",
+    val telephone: String = "", // backwards compatible support for legacy tests
+    val status: String = "pending", // "pending", "approved", "suspended", "rejected"
     val timestamp: Long = System.currentTimeMillis()
 )

@@ -39,6 +39,14 @@ class AppRepository(
         vendorDao.approveVendor(id)
     }
 
+    suspend fun updateVendorStatus(id: Int, status: String) {
+        vendorDao.updateVendorStatus(id, status)
+    }
+
+    suspend fun updateVendorState(id: Int, state: String) {
+        vendorDao.updateVendorState(id, state)
+    }
+
     suspend fun deleteVendor(id: Int) {
         vendorDao.deleteVendor(id)
     }

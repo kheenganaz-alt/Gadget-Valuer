@@ -38,8 +38,14 @@ interface VendorDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertVendor(vendor: VendorShop): Long
 
-    @Query("UPDATE vendor_shops SET status = 'approved' WHERE id = :id")
+    @Query("UPDATE vendor_shops SET status = 'approved', isVerified = 1 WHERE id = :id")
     suspend fun approveVendor(id: Int)
+
+    @Query("UPDATE vendor_shops SET status = :status WHERE id = :id")
+    suspend fun updateVendorStatus(id: Int, status: String)
+
+    @Query("UPDATE vendor_shops SET state = :state WHERE id = :id")
+    suspend fun updateVendorState(id: Int, state: String)
 
     @Query("DELETE FROM vendor_shops WHERE id = :id")
     suspend fun deleteVendor(id: Int)

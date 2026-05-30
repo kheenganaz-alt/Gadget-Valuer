@@ -110,10 +110,62 @@ class MainViewModel(
         viewModelScope.launch {
             try {
                 if (repository.getVendorCount() == 0) {
-                    repository.insertVendor(VendorShop(name = "Slot Systems Hub", center = "Metropolitan Tech Plaza, Suite A2", details = "Main Ring Road. Official retail brand in secondary swapping pipelines.", ratings = 4.7, specialization = "Apple & Samsung Diagnostics", telephone = "+2348030000000", status = "approved"))
-                    repository.insertVendor(VendorShop(name = "MicroStation Hub", center = "Central Tech Galleria, Suite B10", details = "Aviation Avenue. Specializes in direct Grade A refurb imports.", ratings = 4.5, specialization = "HP/Dell Laptops, MacBooks", telephone = "+2348020000001", status = "approved"))
-                    repository.insertVendor(VendorShop(name = "Capital Gadget Palace", center = "Downtown Digital Plaza, Suite C4", details = "Premium trusted node in metropolitan district for secure swap deals.", ratings = 4.8, specialization = "Apple iPhones & Tablets", telephone = "+2348090000002", status = "approved"))
-                    repository.insertVendor(VendorShop(name = "Garden City Tech Haven", center = "Riverside Tech Plaza, Suite D1", details = "Verified hardware swaps with official safe escrow certificates.", ratings = 4.6, specialization = "Infinix, Tecno, Xiaomi", telephone = "+2348060000003", status = "approved"))
+                    repository.insertVendor(VendorShop(
+                        name = "Slot Systems Hub",
+                        ownerName = "Nnamdi Slot",
+                        phone = "+2348030000000",
+                        whatsapp = "+2348030000000",
+                        email = "info@slot.ng",
+                        state = "Lagos",
+                        city = "Ikeja Computer Village",
+                        address = "Slot Plaza, 12 Ola Ayeni St, Ikeja",
+                        categories = "Phones, Laptops, Accessories, Repairs, UK Used, Fairly Used, Brand new",
+                        isVerified = true,
+                        ratings = 4.8,
+                        status = "approved"
+                    ))
+                    repository.insertVendor(VendorShop(
+                        name = "MicroStation Refurbs",
+                        ownerName = "Uche Station",
+                        phone = "+2348020000001",
+                        whatsapp = "+2348020000001",
+                        email = "sales@microstation.ng",
+                        state = "Abuja (FCT)",
+                        city = "Wuse II",
+                        address = "Central Tech Galleria, Suite B10, Wuse 2",
+                        categories = "Laptops, Accessories, UK Used, Brand new",
+                        isVerified = true,
+                        ratings = 4.5,
+                        status = "approved"
+                    ))
+                    repository.insertVendor(VendorShop(
+                        name = "Capital Gadget Palace",
+                        ownerName = "Alhaji Musa Gadgets",
+                        phone = "+2348090000002",
+                        whatsapp = "+2348090000002",
+                        email = "musa@capitalgadgets.ng",
+                        state = "Rivers",
+                        city = "Port Harcourt",
+                        address = "Downtown Digital Plaza, Shop 4, Garrison, PH",
+                        categories = "Phones, Tablets, Accessories, UK Used, Fairly Used",
+                        isVerified = true,
+                        ratings = 4.7,
+                        status = "approved"
+                    ))
+                    repository.insertVendor(VendorShop(
+                        name = "Secured Trade Hub Minna",
+                        ownerName = "Kola Trusted Deals",
+                        phone = "+2348060000003",
+                        whatsapp = "+2348060000003",
+                        email = "minna@securedtrade.ng",
+                        state = "Niger",
+                        city = "Minna",
+                        address = "14 Bosso Road, Minna, opposite Mobil Station",
+                        categories = "Phones, Laptops, Repairs, Fairly Used",
+                        isVerified = false,
+                        ratings = 4.4,
+                        status = "approved"
+                    ))
                 }
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Error seeding vendors", e)
@@ -145,7 +197,7 @@ class MainViewModel(
                 val result = analyzer.analyzeGadget(name, bitmap, customKey)
                 _valuationResult.value = result
                 _uiState.value = UiState.Success(result)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 _uiState.value = UiState.Error(e.message ?: "An unexpected error occurred during valuation.")
             }
         }
@@ -184,7 +236,7 @@ class MainViewModel(
                 calculatedValueMin = finalMin,
                 calculatedValueMax = finalMax,
                 grade = condition,
-                comments = "Adjusted condition & physical inclusions inside secure swapping portfolio."
+                comments = "Adjusted condition & physical inclusions inside safe transactional history."
             )
             repository.insertValuation(historyItem)
         }
@@ -199,7 +251,7 @@ class MainViewModel(
                 val valA = analyzer.analyzeGadget(deviceA)
                 val valB = analyzer.analyzeGadget(deviceB)
 
-                val summaryText = "Comparative secondary-market appraisal: ${valA.name} typically resells for ₦${valA.valueMinGradeB.toFormattedString()} - ₦${valA.valueMaxGradeB.toFormattedString()} (UK Used Good) with steady market liquidity. Handsets of ${valB.name} trade at around ₦${valB.valueMinGradeB.toFormattedString()} - ₦${valB.valueMaxGradeB.toFormattedString()} supporting solid swap-deals."
+                val summaryText = "Comparative secondary-market appraisal: ${valA.name} typically resells for ₦${valA.valueMinGradeB.toFormattedString()} - ₦${valA.valueMaxGradeB.toFormattedString()} (UK Used Good) with steady market liquidity. Handsets of ${valB.name} trade at around ₦${valB.valueMinGradeB.toFormattedString()} - ₦${valB.valueMaxGradeB.toFormattedString()} retaining strong trading value."
 
                 val comp = SavedComparison(
                     gadgetAName = valA.name,
@@ -254,18 +306,80 @@ class MainViewModel(
         _isUserAdmin.value = false
     }
 
+    fun submitVendorApplication(
+        name: String,
+        ownerName: String,
+        phone: String,
+        whatsapp: String,
+        email: String,
+        state: String,
+        city: String,
+        address: String,
+        categories: String,
+        logoUrl: String? = null,
+        verificationDocUrl: String? = null
+    ) {
+        viewModelScope.launch {
+            val app = VendorShop(
+                name = name,
+                ownerName = ownerName,
+                phone = phone,
+                whatsapp = whatsapp,
+                email = email,
+                state = state,
+                city = city,
+                address = address,
+                categories = categories,
+                logoUrl = logoUrl,
+                verificationDocUrl = verificationDocUrl,
+                status = "pending",
+                isVerified = false,
+                ratings = 4.2,
+                telephone = phone, // legacy fallback standard
+                center = "$city, $state", // legacy fallback standard
+                details = "Owner: $ownerName. Address: $address. Specialties: $categories", // legacy fallback standard
+                specialization = categories
+            )
+            repository.insertVendor(app)
+        }
+    }
+
+    // Overload signature for compatibility with other legacy areas
     fun submitVendorApplication(name: String, center: String, details: String, specialization: String, telephone: String) {
         viewModelScope.launch {
             val app = VendorShop(
                 name = name,
+                ownerName = "Unknown",
+                phone = telephone,
+                whatsapp = telephone,
+                email = "",
+                state = "Lagos",
+                city = "Unknown Center",
+                address = center,
+                categories = specialization,
+                logoUrl = null,
+                verificationDocUrl = null,
+                status = "pending",
+                isVerified = false,
+                ratings = 4.5,
+                telephone = telephone,
                 center = center,
                 details = details,
-                specialization = specialization,
-                telephone = telephone,
-                ratings = 4.5,
-                status = "pending"
+                specialization = specialization
             )
             repository.insertVendor(app)
+        }
+    }
+
+    fun updateVendorStatus(id: Int, status: String) {
+        viewModelScope.launch {
+            repository.updateVendorStatus(id, status)
+        }
+    }
+
+    fun updateVendorState(id: Int, state: String) {
+        viewModelScope.launch {
+            repository.updateVendorState(id, state)
         }
     }
 

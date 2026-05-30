@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ai.GadgetAnalysisResult
 import com.example.data.SavedComparison
 import com.example.data.ValuationHistory
+import com.example.data.VendorShop
 import com.example.ui.MainViewModel
 import com.example.ui.UiState
 import java.text.NumberFormat
@@ -393,7 +394,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
             }
         }
 
-        // Safe Swap Essential Safe Trade Alert Banner
+        // Safe Market Essential Safe Trade Alert Banner
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
@@ -422,7 +423,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Safe Swap Trading Guide",
+                            text = "Safe Market Trading Guide",
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -634,18 +635,122 @@ fun HistoryRowItem(history: ValuationHistory, onRowClick: () -> Unit = {}) {
     }
 }
 
+// Robust and safe downsampled bitmap decoder that protects against OutOfMemoryError and native crashes
+fun decodeUriToBitmap(context: android.content.Context, uri: android.net.Uri, maxDim: Int = 1024): android.graphics.Bitmap {
+    val contentResolver = context.contentResolver
+    
+    // Attempt modern ImageDecoder path if API >= 28
+    if (android.os.Build.VERSION.SDK_INT >= 28) {
+        try {
+            val source = android.graphics.ImageDecoder.createSource(contentResolver, uri)
+            return android.graphics.ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                val w = info.size.width
+                val h = info.size.height
+                if (w > maxDim || h > maxDim) {
+                    val ratio = w.toFloat() / h
+                    val targetW = if (w > h) maxDim else (maxDim * ratio).toInt()
+                    val targetH = if (w > h) (maxDim / ratio).toInt() else maxDim
+                    decoder.setTargetSize(targetW, targetH)
+                }
+            }
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            // Fallthrough to standard BitmapFactory if ImageDecoder fails
+        }
+    }
+    
+    // Safe downsampled BitmapFactory path
+    try {
+        // Step 1: Decode dimensions only
+        val options = android.graphics.BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        var pfd = contentResolver.openFileDescriptor(uri, "r")
+        pfd?.use { fd ->
+            android.graphics.BitmapFactory.decodeFileDescriptor(fd.fileDescriptor, null, options)
+        }
+        
+        val w = options.outWidth
+        val h = options.outHeight
+        
+        // Calculate sample size (power of 2)
+        var inSampleSize = 1
+        if (w > maxDim || h > maxDim) {
+            val halfW = w / 2
+            val halfH = h / 2
+            while ((halfW / inSampleSize) >= maxDim && (halfH / inSampleSize) >= maxDim) {
+                inSampleSize *= 2
+            }
+        }
+        
+        // Step 2: Decode bitmap with sample size
+        val decodeOptions = android.graphics.BitmapFactory.Options().apply {
+            this.inSampleSize = inSampleSize
+            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+        }
+        
+        pfd = contentResolver.openFileDescriptor(uri, "r")
+        val decoded = pfd?.use { fd ->
+            android.graphics.BitmapFactory.decodeFileDescriptor(fd.fileDescriptor, null, decodeOptions)
+        }
+        
+        if (decoded != null) {
+            // Precise scaling if it's still larger than maxDim after sampling
+            if (decoded.width > maxDim || decoded.height > maxDim) {
+                val ratio = decoded.width.toFloat() / decoded.height
+                val targetW = if (decoded.width > decoded.height) maxDim else (maxDim * ratio).toInt()
+                val targetH = if (decoded.width > decoded.height) (maxDim / ratio).toInt() else maxDim
+                val scaled = android.graphics.Bitmap.createScaledBitmap(decoded, targetW, targetH, true)
+                if (scaled != decoded) {
+                    decoded.recycle()
+                }
+                return scaled
+            }
+            return decoded
+        }
+    } catch (t: Throwable) {
+        t.printStackTrace()
+    }
+    
+    // Fallback simple decode (last resort)
+    try {
+        contentResolver.openInputStream(uri)?.use { stream ->
+            val decoded = android.graphics.BitmapFactory.decodeStream(stream)
+            if (decoded != null) return decoded
+        }
+    } catch (t: Throwable) {
+        t.printStackTrace()
+    }
+    
+    throw Exception("Secure photo parsing exhausted all options.")
+}
+
 // --- Native Camera & Diagnostics View ---
 @Composable
 fun SimulatedCameraView(viewModel: MainViewModel) {
     val context = LocalContext.current
-    var brandName by remember { mutableStateOf("") }
+    
+    val detectedDevice = remember {
+        val model = android.os.Build.MODEL
+        val manufacturer = android.os.Build.MANUFACTURER
+        if (model.contains("gphone", ignoreCase = true) || model.contains("emulator", ignoreCase = true) || model.contains("sdk", ignoreCase = true) || manufacturer.contains("Genymotion", ignoreCase = true)) {
+            "Google Pixel 8"
+        } else {
+            val manufacturerCapitalized = manufacturer.lowercase().replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.ROOT) else it.toString() }
+            "$manufacturerCapitalized $model"
+        }
+    }
+
+    var brandName by remember { mutableStateOf(detectedDevice) }
     var selectedCat by remember { mutableStateOf("Phone") }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap: Bitmap? ->
         if (bitmap != null) {
-            viewModel.analyzerQueryText.value = brandName.ifBlank { if (selectedCat == "Phone") "iPhone 13 Pro" else "MacBook Air" }
+            val finalName = brandName.ifBlank { if (selectedCat == "Phone") detectedDevice else "MacBook Air" }
+            viewModel.analyzerQueryText.value = finalName
             viewModel.setCapturedBitmap(bitmap)
         }
     }
@@ -669,57 +774,11 @@ fun SimulatedCameraView(viewModel: MainViewModel) {
     ) { uri ->
         if (uri != null) {
             try {
-                val contentResolver = context.contentResolver
-                val maxDim = 1024
-                val bitmap = if (Build.VERSION.SDK_INT >= 28) {
-                    val source = ImageDecoder.createSource(contentResolver, uri)
-                    ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-                        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-                        val w = info.size.width
-                        val h = info.size.height
-                        if (w > maxDim || h > maxDim) {
-                            val ratio = w.toFloat() / h
-                            val targetW: Int
-                            val targetH: Int
-                            if (w > h) {
-                                targetW = maxDim
-                                targetH = (maxDim / ratio).toInt()
-                            } else {
-                                targetH = maxDim
-                                targetW = (maxDim * ratio).toInt()
-                            }
-                            decoder.setTargetSize(targetW, targetH)
-                        }
-                    }
-                } else {
-                    val stream = contentResolver.openInputStream(uri)
-                    val decoded = android.graphics.BitmapFactory.decodeStream(stream)
-                    stream?.close()
-                    if (decoded != null) {
-                        val w = decoded.width
-                        val h = decoded.height
-                        if (w > maxDim || h > maxDim) {
-                            val ratio = w.toFloat() / h
-                            val targetW: Int
-                            val targetH: Int
-                            if (w > h) {
-                                targetW = maxDim
-                                targetH = (maxDim / ratio).toInt()
-                            } else {
-                                targetH = maxDim
-                                targetW = (maxDim * ratio).toInt()
-                            }
-                            Bitmap.createScaledBitmap(decoded, targetW, targetH, true)
-                        } else {
-                            decoded
-                        }
-                    } else {
-                        throw Exception("Failed to decode")
-                    }
-                }
-                viewModel.analyzerQueryText.value = brandName.ifBlank { if (selectedCat == "Phone") "iPhone 13 Pro" else "MacBook Air" }
+                val bitmap = decodeUriToBitmap(context, uri)
+                val finalName = brandName.ifBlank { if (selectedCat == "Phone") detectedDevice else "MacBook Air" }
+                viewModel.analyzerQueryText.value = finalName
                 viewModel.setCapturedBitmap(bitmap)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 e.printStackTrace()
                 android.widget.Toast.makeText(context, "Error decoding photo securely", android.widget.Toast.LENGTH_SHORT).show()
             }
@@ -780,13 +839,62 @@ fun SimulatedCameraView(viewModel: MainViewModel) {
                     modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
                 )
 
-                // User specifies model hints
-                Text("Enter model to guide visual analysis:", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                Spacer(modifier = Modifier.height(8.dp))
+                // 1. Category Selection Row
+                Text(
+                    text = "SELECT DEVICE CATEGORY",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    letterSpacing = 0.5.sp,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                ) {
+                    listOf("Phone", "Laptop", "Tablet", "Smartwatch").forEach { cat ->
+                        val isSelected = selectedCat == cat
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (isSelected) MaterialTheme.colorScheme.primary else Color(0xFF334155))
+                                .clickable { 
+                                    selectedCat = cat 
+                                    // Update default model if they haven't typed an explicit brand custom name!
+                                    if (brandName.isBlank() || brandName == detectedDevice || brandName == "MacBook Air" || brandName == "iPad Air 5" || brandName == "Apple Watch Series 8") {
+                                        brandName = when (cat) {
+                                            "Phone" -> detectedDevice
+                                            "Laptop" -> "MacBook Air"
+                                            "Tablet" -> "iPad Air 5"
+                                            "Smartwatch" -> "Apple Watch Series 8"
+                                            else -> "iPhone 13 Pro"
+                                        }
+                                    }
+                                }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = cat,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else Color.White,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // 2. User specifies model input string
+                Text("Verify / Enter Device Model Name To Appraise:", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Spacer(modifier = Modifier.height(6.dp))
                 TextField(
                     value = brandName,
                     onValueChange = { brandName = it },
-                    placeholder = { Text("e.g., iPhone 13 Pro Max", fontSize = 13.sp) },
+                    placeholder = { Text("e.g., iPhone 15 Pro Max", fontSize = 13.sp) },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -802,27 +910,60 @@ fun SimulatedCameraView(viewModel: MainViewModel) {
                     shape = RoundedCornerShape(8.dp)
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // 3. Popular Quick Choose Targets Row (Scrollable horizontally)
+                Text(
+                    text = "QUICK MATCH POPULAR DEVICES (TAP TO SEED)",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    letterSpacing = 0.5.sp,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                
+                // Set of targets based on category
+                val popularTargets = when (selectedCat) {
+                    "Laptop" -> listOf("MacBook Pro M3", "MacBook Air M2", "HP EliteBook 840", "Dell Latitude 5420", "Lenovo ThinkPad X1")
+                    "Tablet" -> listOf("iPad Pro M2", "iPad Air 5", "Samsung Galaxy Tab S9", "Surface Pro 9")
+                    "Smartwatch" -> listOf("Apple Watch Ultra 2", "Apple Watch Series 9", "Galaxy Watch 6")
+                    else -> listOf(
+                        "✨ My Detected ($detectedDevice)",
+                        "iPhone 15 Pro Max", 
+                        "iPhone 14 Pro Max", 
+                        "iPhone 13 Pro", 
+                        "Samsung Galaxy S24 Ultra", 
+                        "Infinix Hot 40 Pro", 
+                        "Tecno Spark 20 Pro"
+                    )
+                }
 
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = selectedCat == "Phone", 
-                            onClick = { selectedCat = "Phone" },
-                            colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary, unselectedColor = Color.White)
-                        )
-                        Text("Phone", color = Color.White, fontSize = 12.sp)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = selectedCat == "Laptop", 
-                            onClick = { selectedCat = "Laptop" },
-                            colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary, unselectedColor = Color.White)
-                        )
-                        Text("Laptop", color = Color.White, fontSize = 12.sp)
+                    popularTargets.forEach { target ->
+                        val cleanTarget = if (target.startsWith("✨")) detectedDevice else target
+                        val isMatched = brandName.equals(cleanTarget, ignoreCase = true)
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(1.dp, if (isMatched) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                .background(if (isMatched) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color(0xFF1E293B))
+                                .clickable { 
+                                    brandName = cleanTarget
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = target,
+                                color = if (isMatched) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.85f),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
             }
@@ -896,7 +1037,7 @@ fun SimulatedCameraView(viewModel: MainViewModel) {
                 // Interactive Simulator Appraisal for Emulator testing
                 Button(
                     onClick = {
-                        val mockName = brandName.ifBlank { if (selectedCat == "Phone") "iPhone 13 Pro" else "MacBook Air" }
+                        val mockName = brandName.ifBlank { if (selectedCat == "Phone") detectedDevice else "MacBook Air" }
                         val mockBitmap = createMockDeviceBitmap(mockName, selectedCat)
                         viewModel.analyzerQueryText.value = mockName
                         viewModel.setCapturedBitmap(mockBitmap)
@@ -1240,7 +1381,7 @@ fun ValuationScreen(viewModel: MainViewModel) {
                     }
                 }
 
-                // AI Expert Advice specifically for secure secondary market swaps
+                // AI Expert Advice specifically for secure secondary market trades and transactions
                 item {
                     Text("Expert Appraisal Advice", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -1561,15 +1702,36 @@ fun CompareScreen(viewModel: MainViewModel) {
 @Composable
 fun VendorsScreen(viewModel: MainViewModel) {
     val allVendors by viewModel.vendorsList.collectAsStateWithLifecycle()
-    val approvedVendors = allVendors.filter { it.status == "approved" }
+    var selectedState by remember { mutableStateOf("Lagos") }
+    
+    val filteredVendors = allVendors.filter { 
+        it.status == "approved" && it.state.equals(selectedState, ignoreCase = true) 
+    }
 
     var showApplyDialog by remember { mutableStateOf(false) }
     var shopName by remember { mutableStateOf("") }
-    var shopAddress by remember { mutableStateOf("") }
-    var shopDescription by remember { mutableStateOf("") }
-    var shopSpecialty by remember { mutableStateOf("") }
-    var shopPhone by remember { mutableStateOf("") }
+    var ownerName by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var whatsapp by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+    var operatingState by remember { mutableStateOf("Lagos") }
+    var city by remember { mutableStateOf("") }
+    var address by remember { mutableStateOf("") }
+    
+    // Check categories selection
+    val categoriesOptions = listOf("Phones", "Laptops", "Accessories", "Repairs", "UK Used", "Fairly Used", "Brand new")
+    var selectedCategoryChips by remember { mutableStateOf(setOf<String>()) }
+    
+    var logoAttached by remember { mutableStateOf(false) }
+    var docAttached by remember { mutableStateOf(false) }
     var submissionSuccess by remember { mutableStateOf(false) }
+    
+    // Dialog details viewer
+    var selectedViewShop by remember { mutableStateOf<VendorShop?>(null) }
+
+    val nigerianStatesList = listOf(
+        "Lagos", "Abuja (FCT)", "Rivers", "Niger", "Kano", "Oyo", "Anambra", "Delta", "Edo", "Enugu", "Abia", "Ogun", "Kaduna", "Kogi"
+    )
 
     val context = LocalContext.current
 
@@ -1579,34 +1741,98 @@ fun VendorsScreen(viewModel: MainViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Descriptive Header
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Verified Swapping Hubs", style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Black)
-                    Text("Physically verified partner shops offering accurate payouts & official escrow safety agreements.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text("Registered Gadget Shops", style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Black)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Locate verified physical dealers in your State for secure buy-and-sell, fast trade-ins, and escrow transactions.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
+        }
+
+        // Horizontal State Selector Picker
+        item {
+            Column {
+                Text(
+                    text = "FILTER SHOPS BY NIGERIAN STATE",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    letterSpacing = 0.5.sp,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                ) {
+                    nigerianStatesList.take(8).forEach { stateItem ->
+                        val isSelected = selectedState.equals(stateItem, ignoreCase = true)
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                .clickable { selectedState = stateItem }
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = stateItem,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                
+                // Advanced State drop-down choice
+                var showStatePickerMenu by remember { mutableStateOf(false) }
+                Box(modifier = Modifier.padding(top = 8.dp)) {
+                    OutlinedButton(
+                        onClick = { showStatePickerMenu = true },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("btn_state_picker_dropdown")
+                    ) {
+                        Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Show All States Picker ($selectedState)")
+                    }
+                    
+                    DropdownMenu(
+                        expanded = showStatePickerMenu,
+                        onDismissRequest = { showStatePickerMenu = false }
+                    ) {
+                        nigerianStatesList.forEach { sName ->
+                            DropdownMenuItem(
+                                text = { Text(sName) },
+                                onClick = {
+                                    selectedState = sName
+                                    showStatePickerMenu = false
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // Apply Card Banner
+        // Apply Card Banner for new vendors
         item {
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Storefront, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Icon(Icons.Default.Storefront, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Own an Active Tech Shop?", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                        Text("Own an Active Gadget Plaza?", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSecondaryContainer)
                     }
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("Apply to have your partner node shown in our directory after Admin verification.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f))
+                    Text("Apply to list your shop and highlight your retail & trade-in channels. Safe, checked physical verification standards are held.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f))
                     Spacer(modifier = Modifier.height(12.dp))
                     Button(
                         onClick = { showApplyDialog = true },
@@ -1616,25 +1842,41 @@ fun VendorsScreen(viewModel: MainViewModel) {
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Apply to Show Your Shop", fontSize = 12.sp)
+                        Text("Register Shop Listing", fontSize = 12.sp)
                     }
                 }
             }
         }
 
-        if (approvedVendors.isEmpty()) {
+        // Filter result display
+        if (filteredVendors.isEmpty()) {
             item {
-                Box(
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(vertical = 12.dp)
                 ) {
-                    Text("No partner shops found.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.Storefront, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "No registered shops available in this state yet. Registered sellers can apply to be listed.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.testTag("txt_empty_state_shops")
+                        )
+                    }
                 }
             }
         } else {
-            items(approvedVendors) { vendor ->
+            items(filteredVendors) { vendor ->
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     shape = RoundedCornerShape(16.dp),
@@ -1648,37 +1890,63 @@ fun VendorsScreen(viewModel: MainViewModel) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(vendor.name, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = vendor.name, 
+                                        fontWeight = FontWeight.Bold, 
+                                        fontSize = 17.sp, 
+                                        maxLines = 1, 
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    if (vendor.isVerified) {
+                                        Icon(
+                                            Icons.Default.Verified, 
+                                            contentDescription = "Verified Badged Dealer", 
+                                            tint = Color(0xFF10B981), 
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
                                     Spacer(modifier = Modifier.width(2.dp))
-                                    Text(vendor.center, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("${vendor.city}, ${vendor.state}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                                 }
                             }
-                            Spacer(modifier = Modifier.width(8.dp))
+                            
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(Color.Green.copy(alpha = 0.1f))
+                                    .background(Color(0xFFFBBF24).copy(alpha = 0.15f))
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(12.dp))
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text("${vendor.ratings}", fontWeight = FontWeight.Bold, color = Color(0xFF047857), fontSize = 11.sp)
+                                    Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("${vendor.ratings}", fontWeight = FontWeight.Bold, color = Color(0xFFD97706), fontSize = 11.sp)
                                 }
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(vendor.details, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
                         Spacer(modifier = Modifier.height(8.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Speciality: ", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
-                            Text(vendor.specialization, fontSize = 11.sp)
+                        Text(vendor.details.ifBlank { "High grade electronic sales, trade-ins & instant appraisals at verified mall locations." }, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.wrapContentWidth()) {
+                            Text("Categories: ", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                            Text(
+                                text = vendor.categories, 
+                                fontSize = 11.sp, 
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1687,7 +1955,8 @@ fun VendorsScreen(viewModel: MainViewModel) {
                             Button(
                                 onClick = {
                                     try {
-                                        val url = "https://api.whatsapp.com/send?phone=${vendor.telephone.replace("+", "").replace(" ", "")}"
+                                        val formattedNum = vendor.phone.replace("+", "").replace(" ", "").trim()
+                                        val url = "https://api.whatsapp.com/send?phone=$formattedNum"
                                         val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
                                         context.startActivity(intent)
                                     } catch (e: Exception) {}
@@ -1696,24 +1965,19 @@ fun VendorsScreen(viewModel: MainViewModel) {
                                 shape = RoundedCornerShape(10.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366))
                             ) {
-                                Icon(Icons.Default.Chat, contentDescription = null, tint = Color.White)
+                                Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("WhatsApp", color = Color.White, fontSize = 12.sp)
+                                Text("WhatsApp", color = Color.White, fontSize = 11.sp)
                             }
 
-                            OutlinedButton(
-                                onClick = {
-                                    try {
-                                        val intent = android.content.Intent(android.content.Intent.ACTION_DIAL, android.net.Uri.parse("tel:${vendor.telephone}"))
-                                        context.startActivity(intent)
-                                    } catch (e: Exception) {}
-                                },
+                            FilledTonalButton(
+                                onClick = { selectedViewShop = vendor },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Icon(Icons.Default.Call, contentDescription = null)
+                                Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Call Partner", fontSize = 12.sp)
+                                Text("View Shop", fontSize = 11.sp)
                             }
                         }
                     }
@@ -1722,63 +1986,271 @@ fun VendorsScreen(viewModel: MainViewModel) {
         }
     }
 
+    // --- Dynamic Viewer Dialog for View Shop ---
+    selectedViewShop?.let { shopDetail ->
+        AlertDialog(
+            onDismissRequest = { selectedViewShop = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(shopDetail.name, fontWeight = FontWeight.Black)
+                    if (shopDetail.isVerified) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(Icons.Default.Verified, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(18.dp))
+                    }
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
+                    if (shopDetail.isVerified) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF10B981).copy(alpha = 0.12f))
+                                .padding(8.dp)
+                        ) {
+                            Text("🛡️ Officially approved & verified physical trading hub.", color = Color(0xFF047857), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(8.dp)
+                        ) {
+                            Text("⏳ Pending physical location review by administration.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        }
+                    }
+
+                    Text("📍 PHYSICAL MALL ADDRESS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Text(shopDetail.address.ifBlank { shopDetail.center }, style = MaterialTheme.typography.bodyMedium)
+
+                    Text("👤 PROPRIETOR / REPRESENTATIVE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Text(shopDetail.ownerName.ifBlank { "Official Slot Administrator" }, style = MaterialTheme.typography.bodyMedium)
+
+                    Text("📞 DIRECT PHONE NUMBERS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Text(shopDetail.phone.ifBlank { shopDetail.telephone }, style = MaterialTheme.typography.bodyMedium)
+
+                    if (shopDetail.email.isNotBlank()) {
+                        Text("✉️ REGISTERED EMAIL", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        Text(shopDetail.email, style = MaterialTheme.typography.bodyMedium)
+                    }
+
+                    Text("⚙️ TRADE CATEGORIES APPROVED", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Row(modifier = Modifier.wrapContentWidth()) {
+                        shopDetail.categories.split(",").forEach { cat ->
+                            Box(
+                                modifier = Modifier
+                                    .padding(end = 4.dp, bottom = 4.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(cat.trim(), fontSize = 10.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    Text("💡 TRADE AND DIAGNOSTIC DETAILS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Text(shopDetail.details.ifBlank { "Provides certified UK Used device appraisals, trade-ins, and secure transactions." }, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                Button(onClick = { selectedViewShop = null }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+
+    // --- Dynamic Dialog: Registration Form ---
     if (showApplyDialog) {
         AlertDialog(
             onDismissRequest = { 
                 showApplyDialog = false
                 submissionSuccess = false
             },
-            title = { Text(if (submissionSuccess) "Application Submitted" else "Show Your Shop Listing") },
+            title = { Text(if (submissionSuccess) "Shop Registration Filed" else "Apply for Partner Placement") },
             text = {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
                 ) {
                     if (submissionSuccess) {
                         Text(
-                            "Your application is received!\n\nOnce reviewed and approved by the administrator (Kheenganaz@gmail.com), your shop listing will appear in the directory for everyone.",
+                            "Thank you! Your shop registration has been successfully captured under PENDING status.\n\nOnce physical address verification checks complete by Administrator (Kheenganaz@gmail.com) in your State ($operatingState), your shop will appear on the dynamic state picker directory list.\n\nYou can view your application status in the Admin review page.",
                             fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium
                         )
                     } else {
-                        Text("Fill in details to apply for verified partner placement. Admin checks address physically.", fontSize = 13.sp)
-                        
+                        Text("Fill out mandatory details. Applications will undergo strict address review.", fontSize = 12.sp)
+
                         OutlinedTextField(
                             value = shopName,
                             onValueChange = { shopName = it },
-                            label = { Text("Shop or Brand Name") },
+                            label = { Text("Shop or Brand Name *") },
                             modifier = Modifier.fillMaxWidth().testTag("apply_shop_name")
                         )
 
                         OutlinedTextField(
-                            value = shopAddress,
-                            onValueChange = { shopAddress = it },
-                            label = { Text("Physical Mall Address / Suite") },
-                            modifier = Modifier.fillMaxWidth().testTag("apply_shop_address")
+                            value = ownerName,
+                            onValueChange = { ownerName = it },
+                            label = { Text("Owner or Director Name *") },
+                            modifier = Modifier.fillMaxWidth().testTag("apply_owner_name")
                         )
 
                         OutlinedTextField(
-                            value = shopDescription,
-                            onValueChange = { shopDescription = it },
-                            label = { Text("Shop Profile & Swap Services") },
-                            modifier = Modifier.fillMaxWidth().testTag("apply_shop_desc")
+                            value = phone,
+                            onValueChange = { phone = it },
+                            label = { Text("Office Phone Number *") },
+                            placeholder = { Text("e.g. +2348030001111") },
+                            modifier = Modifier.fillMaxWidth().testTag("apply_phone")
                         )
 
                         OutlinedTextField(
-                            value = shopSpecialty,
-                            onValueChange = { shopSpecialty = it },
-                            label = { Text("What gadgets do you support?") },
-                            placeholder = { Text("e.g. Laptops, iPhones, Samsung") },
-                            modifier = Modifier.fillMaxWidth().testTag("apply_shop_specialty")
+                            value = whatsapp,
+                            onValueChange = { whatsapp = it },
+                            label = { Text("WhatsApp Hotline *") },
+                            placeholder = { Text("e.g. +2348030001111") },
+                            modifier = Modifier.fillMaxWidth().testTag("apply_whatsapp")
                         )
 
                         OutlinedTextField(
-                            value = shopPhone,
-                            onValueChange = { shopPhone = it },
-                            label = { Text("Active phone number") },
-                            placeholder = { Text("e.g. +2348011223344") },
-                            modifier = Modifier.fillMaxWidth().testTag("apply_shop_phone")
+                            value = email,
+                            onValueChange = { email = it },
+                            label = { Text("Business Email (Optional)") },
+                            modifier = Modifier.fillMaxWidth().testTag("apply_email")
                         )
+
+                        // State picker choice
+                        var operatingStateExpanded by remember { mutableStateOf(false) }
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = operatingState,
+                                onValueChange = {},
+                                label = { Text("Operating Nigerian State *") },
+                                readOnly = true,
+                                trailingIcon = {
+                                    IconButton(onClick = { operatingStateExpanded = true }) {
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().clickable { operatingStateExpanded = true }
+                            )
+                            DropdownMenu(
+                                expanded = operatingStateExpanded,
+                                onDismissRequest = { operatingStateExpanded = false }
+                            ) {
+                                nigerianStatesList.forEach { sName ->
+                                    DropdownMenuItem(
+                                        text = { Text(sName) },
+                                        onClick = {
+                                            operatingState = sName
+                                            operatingStateExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = city,
+                            onValueChange = { city = it },
+                            label = { Text("City or Local Area *") },
+                            placeholder = { Text("e.g. Ikeja, Wuse II, Gbagada") },
+                            modifier = Modifier.fillMaxWidth().testTag("apply_city")
+                        )
+
+                        OutlinedTextField(
+                            value = address,
+                            onValueChange = { address = it },
+                            label = { Text("Physical Shop Address / Plaza Suite *") },
+                            modifier = Modifier.fillMaxWidth().testTag("apply_address")
+                        )
+
+                        // Categories checkbox chips selection
+                        Text("SELECT SALES & SERVICE CATEGORIES *", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        Column {
+                            categoriesOptions.forEach { option ->
+                                val isChecked = selectedCategoryChips.contains(option)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedCategoryChips = if (isChecked) {
+                                                selectedCategoryChips - option
+                                            } else {
+                                                selectedCategoryChips + option
+                                            }
+                                        }
+                                        .padding(vertical = 4.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = isChecked,
+                                        onCheckedChange = {
+                                            selectedCategoryChips = if (isChecked) {
+                                                selectedCategoryChips - option
+                                            } else {
+                                                selectedCategoryChips + option
+                                            }
+                                        }
+                                    )
+                                    Text(option, fontSize = 13.sp)
+                                }
+                            }
+                        }
+
+                        // Attach logo optional logic
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                .padding(12.dp)
+                        ) {
+                            Text("Shop Logo Icon *", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            OutlinedButton(
+                                onClick = { logoAttached = !logoAttached },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = if (logoAttached) Color(0xFF10B981) else MaterialTheme.colorScheme.primary)
+                            ) {
+                                Icon(if (logoAttached) Icons.Default.Check else Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(if (logoAttached) "Attached" else "Upload Logo", fontSize = 11.sp)
+                            }
+                        }
+
+                        // Attach business verification document optional
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                .padding(12.dp)
+                        ) {
+                            Text("CAC / CAC Registration Doc *", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            OutlinedButton(
+                                onClick = { docAttached = !docAttached },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = if (docAttached) Color(0xFF10B981) else MaterialTheme.colorScheme.primary)
+                            ) {
+                                Icon(if (docAttached) Icons.Default.Check else Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(if (docAttached) "Registered" else "Attach CAC", fontSize = 11.sp)
+                            }
+                        }
                     }
                 }
             },
@@ -1788,25 +2260,44 @@ fun VendorsScreen(viewModel: MainViewModel) {
                         showApplyDialog = false
                         submissionSuccess = false
                         shopName = ""
-                        shopAddress = ""
-                        shopDescription = ""
-                        shopSpecialty = ""
-                        shopPhone = ""
+                        ownerName = ""
+                        phone = ""
+                        whatsapp = ""
+                        email = ""
+                        city = ""
+                        address = ""
+                        selectedCategoryChips = setOf()
+                        logoAttached = false
+                        docAttached = false
                     }) {
                         Text("OK")
                     }
                 } else {
+                    val isValid = shopName.isNotBlank() && ownerName.isNotBlank() && phone.isNotBlank() && whatsapp.isNotBlank() && city.isNotBlank() && address.isNotBlank() && selectedCategoryChips.isNotEmpty()
                     Button(
                         onClick = {
-                            if (shopName.isNotBlank() && shopAddress.isNotBlank() && shopPhone.isNotBlank()) {
-                                viewModel.submitVendorApplication(shopName, shopAddress, shopDescription, shopSpecialty, shopPhone)
+                            if (isValid) {
+                                val concatCategories = selectedCategoryChips.joinToString(", ")
+                                viewModel.submitVendorApplication(
+                                    name = shopName,
+                                    ownerName = ownerName,
+                                    phone = phone,
+                                    whatsapp = whatsapp,
+                                    email = email,
+                                    state = operatingState,
+                                    city = city,
+                                    address = address,
+                                    categories = concatCategories,
+                                    logoUrl = if (logoAttached) "attached" else null,
+                                    verificationDocUrl = if (docAttached) "attached" else null
+                                )
                                 submissionSuccess = true
                             }
                         },
-                        enabled = shopName.isNotBlank() && shopAddress.isNotBlank() && shopPhone.isNotBlank(),
+                        enabled = isValid,
                         modifier = Modifier.testTag("apply_submit_btn")
                     ) {
-                        Text("Submit Application")
+                        Text("Submit Shop details")
                     }
                 }
             },
@@ -1845,8 +2336,8 @@ fun TipsScreen(viewModel: MainViewModel) {
     ) {
         // App Header
         item {
-            Text("Swapper Profile Suite", style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Black)
-            Text("Access verified swapper credentials, application stats, and trade safety protection rules.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            Text("User Profile Portal", style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Black)
+            Text("Access verified trader credentials, application stats, and safe market transaction rules.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         }
 
         // Tab Selector for Organization
@@ -1872,7 +2363,7 @@ fun TipsScreen(viewModel: MainViewModel) {
                     text = { Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Safe Swap Rules", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text("Safe Trade Rules", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }}
                 )
             }
@@ -1891,7 +2382,7 @@ fun TipsScreen(viewModel: MainViewModel) {
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         if (!isLoggedIn) {
-                            Text("Activate Swapper Profile", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text("Activate User Profile", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                             Text("Log in to verify listings, submit shops, or activate admin privileges.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), modifier = Modifier.padding(top = 2.dp, bottom = 12.dp))
                             
                             OutlinedTextField(
@@ -2081,7 +2572,7 @@ fun TipsScreen(viewModel: MainViewModel) {
                                 Icon(Icons.Default.Verified, contentDescription = null, tint = Color(0xFF10B981))
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text("Reputed Grade", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                                Text("Silver Swapper", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                                Text("Silver Member", fontWeight = FontWeight.Black, fontSize = 16.sp)
                             }
                         }
                     }
@@ -2116,12 +2607,24 @@ fun TipsScreen(viewModel: MainViewModel) {
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
-                                Text(application.name, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text("📍 Address: ${application.center}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
-                                Text("📞 Phone: ${application.telephone}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
-                                Text("🏷️ Tag / Specialty: ${application.specialization}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
-                                Text("📝 Details: ${application.details}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), modifier = Modifier.padding(vertical = 4.dp))
+                                Text(application.name, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("👤 Proprietor: ${application.ownerName.ifBlank { "N/A" }}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("📞 Phone: ${application.phone.ifBlank { application.telephone }}", fontSize = 12.sp)
+                                Text("💬 WhatsApp Hot-line: ${application.whatsapp}", fontSize = 12.sp)
+                                if (application.email.isNotBlank()) {
+                                    Text("✉️ Email Address: ${application.email}", fontSize = 12.sp)
+                                }
+                                Text("📍 Operating Nigerian State: ${application.state}", fontSize = 12.sp)
+                                Text("🗺️ City/Area: ${application.city}", fontSize = 12.sp)
+                                Text("🏢 Plaza Mall Address: ${application.address.ifBlank { application.center }}", fontSize = 12.sp)
+                                Text("🏷️ Approved Trade Categories: ${application.categories}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (application.logoUrl != null) {
+                                    Text("🖼️ Shop Logo Icon: Uploaded & Associated", fontSize = 11.sp, color = Color(0xFF10B981), fontWeight = FontWeight.Bold)
+                                }
+                                if (application.verificationDocUrl != null) {
+                                    Text("📃 CAC Doc / Business Proof: Attached & Signed", fontSize = 11.sp, color = Color(0xFF10B981), fontWeight = FontWeight.Bold)
+                                }
                                 
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(
@@ -2153,10 +2656,10 @@ fun TipsScreen(viewModel: MainViewModel) {
                 }
             }
         } else {
-            // SAFE SWAP RULES TAB
+            // SAFE TRADE RULES TAB
             item {
                 Text("Trade Safeguards & Escrows", style = MaterialTheme.typography.displayMedium, fontWeight = FontWeight.Bold)
-                Text("Follow strict safety guidelines inside gadget swap malls.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                Text("Follow strict safety guidelines inside gadget market malls and plazas.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
             }
 
             item {
@@ -2193,8 +2696,8 @@ fun TipsScreen(viewModel: MainViewModel) {
 
             item {
                 SafeManualCard(
-                    title = "5. Escrow Swapping Protocols",
-                    desc = "If doing a mail-order or remote swap, utilize a trusted, physical escrow partner in the plaza to hold assets until diagnostic results compile cleanly.",
+                    title = "5. Escrow and Secured Payment Protocols",
+                    desc = "If doing a mail-order or remote purchase, utilize a trusted, physical escrow partner in the plaza to hold assets until diagnostic results compile cleanly.",
                     Icons.Default.Verified
                 )
             }
@@ -2247,7 +2750,7 @@ fun HistoryScreen(viewModel: MainViewModel) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text("Price Swapping Audit Logs", style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Black)
+                Text("Appraisal History Logs", style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Black)
                 Text("Past diagnostic appraisals.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             }
             if (list.isNotEmpty()) {
